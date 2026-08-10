@@ -1,0 +1,93 @@
+package adminapi
+
+import (
+	"context"
+	"log/slog"
+	"net/http"
+
+	"github.com/bornholm/go-x/slogx"
+	"github.com/pkg/errors"
+	sloghttp "github.com/samber/slog-http"
+)
+
+// Server exposes the instance administration API on its own listener, with its
+// own TLS configuration and its own middleware chain.
+//
+// It deliberately shares nothing with the public HTTP server beyond the process
+// and its root context: no CORS, no cookie, no color scheme, no session, no
+// user authentication. Its only authentication mechanism is the client
+// certificate verified during the TLS handshake.
+type Server struct {
+	opts *Options
+}
+
+func NewServer(funcs ...OptionFunc) *Server {
+	return &Server{
+		opts: NewOptions(funcs...),
+	}
+}
+
+// Addr returns the address the server listens on.
+func (s *Server) Addr() string {
+	if s.opts.Listener != nil {
+		return s.opts.Listener.Addr().String()
+	}
+	return s.opts.Address
+}
+
+// Run serves the API until ctx is canceled, then shuts down gracefully within
+// the configured timeout.
+func (s *Server) Run(ctx context.Context) error {
+	if s.opts.TLSConfig == nil {
+		return errors.New("admin api server requires a TLS configuration")
+	}
+	if s.opts.Handler == nil {
+		return errors.New("admin api server requires a handler")
+	}
+
+	handler := requireClientCert(s.opts.Handler)
+	handler = sloghttp.Recovery(handler)
+	handler = sloghttp.New(slog.Default())(handler)
+
+	server := &http.Server{
+		Addr:      s.opts.Address,
+		Handler:   handler,
+		TLSConfig: s.opts.TLSConfig,
+	}
+
+	shutdownDone := make(chan struct{})
+
+	go func() {
+		defer close(shutdownDone)
+
+		<-ctx.Done()
+
+		// Detached from ctx, which is already canceled, so in-flight requests
+		// keep the timeout they are entitled to.
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.opts.ShutdownTimeout)
+		defer cancel()
+
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			slog.ErrorContext(ctx, "could not gracefully shutdown admin api server", slogx.Error(errors.WithStack(err)))
+		}
+	}()
+
+	// The certificate and key already live in TLSConfig, hence the empty file
+	// names.
+	var err error
+	if s.opts.Listener != nil {
+		err = server.ServeTLS(s.opts.Listener, "", "")
+	} else {
+		err = server.ListenAndServeTLS("", "")
+	}
+
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return errors.WithStack(err)
+	}
+
+	if ctx.Err() != nil {
+		<-shutdownDone
+	}
+
+	return nil
+}

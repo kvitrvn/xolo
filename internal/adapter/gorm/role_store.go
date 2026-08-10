@@ -15,7 +15,13 @@ import (
 // CreateRole implements port.RoleStore.
 func (s *Store) CreateRole(ctx context.Context, role model.Role) error {
 	return s.withRetry(ctx, true, func(ctx context.Context, db *gorm.DB) error {
-		return errors.WithStack(db.Create(fromRole(role)).Error)
+		if err := db.Create(fromRole(role)).Error; err != nil {
+			if isUniqueConstraintViolation(err, "roles.org_id", "roles.name") {
+				return errors.Wrapf(port.ErrAlreadyExists, "role %q already exists in this organization", role.Name())
+			}
+			return errors.WithStack(err)
+		}
+		return nil
 	}, sqlite3.BUSY, sqlite3.LOCKED)
 }
 

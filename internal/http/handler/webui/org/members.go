@@ -10,6 +10,7 @@ import (
 	"github.com/bornholm/go-x/slogx"
 	"github.com/xolo-gateway/xolo/internal/core/model"
 	"github.com/xolo-gateway/xolo/internal/core/port"
+	"github.com/xolo-gateway/xolo/internal/core/service"
 	httpCtx "github.com/xolo-gateway/xolo/internal/http/context"
 	common "github.com/xolo-gateway/xolo/internal/http/handler/webui/common/component"
 	"github.com/xolo-gateway/xolo/internal/http/handler/webui/org/component"
@@ -266,15 +267,5 @@ func (h *Handler) isLastOwner(ctx context.Context, orgID model.OrgID, exclude mo
 	if err != nil {
 		return false, errors.WithStack(err)
 	}
-	for _, m := range members {
-		if m.ID() == exclude {
-			continue
-		}
-		for _, role := range m.Roles() {
-			if role.BuiltinKind() == model.BuiltinKindOwner {
-				return false, nil
-			}
-		}
-	}
-	return true, nil
+	return service.IsLastOwner(members, exclude), nil
 }

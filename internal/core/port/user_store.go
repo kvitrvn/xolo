@@ -14,6 +14,11 @@ type UserStore interface {
 	// GetUserByID finds a user by its ID, or returns ErrNotFound if not found
 	GetUserByID(ctx context.Context, userID model.UserID) (model.User, error)
 
+	// GetUserByIdentity finds a user by its provider/subject unique tuple, or
+	// returns ErrNotFound if not found. Unlike FindOrCreateUser, it never
+	// creates anything.
+	GetUserByIdentity(ctx context.Context, provider, subject string) (model.User, error)
+
 	// QueryUsers returns a paginated list of users
 	QueryUsers(ctx context.Context, opts QueryUsersOptions) ([]model.User, error)
 

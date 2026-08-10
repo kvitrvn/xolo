@@ -60,6 +60,22 @@ func (s *UserStore) FindOrCreateUser(ctx context.Context, provider string, subje
 	return user, nil
 }
 
+// GetUserByIdentity implements [port.UserStore].
+func (s *UserStore) GetUserByIdentity(ctx context.Context, provider string, subject string) (model.User, error) {
+	if user, exists := s.userCache.Get(getUserProviderSubjectCacheKey(provider, subject)); exists {
+		return user, nil
+	}
+
+	user, err := s.backend.GetUserByIdentity(ctx, provider, subject)
+	if err != nil {
+		return nil, err
+	}
+
+	s.userCache.Add(NewCacheableUser(user))
+
+	return user, nil
+}
+
 // GetUserAuthTokens implements [port.UserStore].
 func (s *UserStore) GetUserAuthTokens(ctx context.Context, userID model.UserID) ([]model.AuthToken, error) {
 	return s.backend.GetUserAuthTokens(ctx, userID)

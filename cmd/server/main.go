@@ -48,16 +48,71 @@ func main() {
 		cancel()
 	}()
 
-	server, err := setup.NewHTTPServerFromConfig(ctx, conf)
+	httpServer, err := setup.NewHTTPServerFromConfig(ctx, conf)
 	if err != nil {
 		slog.ErrorContext(ctx, "could not setup http server", slog.Any("error", errors.WithStack(err)))
 		os.Exit(1)
 	}
 
-	slog.InfoContext(ctx, "starting server", slog.Any("address", conf.HTTP.Address))
+	servers := []namedServer{
+		{name: "http", address: conf.HTTP.Address, run: httpServer.Run},
+	}
 
-	if err := server.Run(ctx); err != nil {
-		slog.Error("could not run server", slog.Any("error", errors.WithStack(err)))
+	// Nil when the Admin API is disabled: the public server then runs alone.
+	adminAPIServer, err := setup.NewAdminAPIServerFromConfig(ctx, conf)
+	if err != nil {
+		slog.ErrorContext(ctx, "could not setup admin api server", slog.Any("error", errors.WithStack(err)))
 		os.Exit(1)
 	}
+	if adminAPIServer != nil {
+		servers = append(servers, namedServer{name: "admin-api", address: conf.AdminAPI.Address, run: adminAPIServer.Run})
+	}
+
+	if err := run(ctx, cancel, servers); err != nil {
+		os.Exit(1)
+	}
+}
+
+type namedServer struct {
+	name    string
+	address string
+	run     func(ctx context.Context) error
+}
+
+// run starts every server on the shared root context and waits for all of them
+// to return. The first failure cancels the context so the others shut down too:
+// no fatal error is ever silently ignored.
+func run(ctx context.Context, cancel context.CancelFunc, servers []namedServer) error {
+	type result struct {
+		name string
+		err  error
+	}
+
+	results := make(chan result, len(servers))
+
+	for _, server := range servers {
+		slog.InfoContext(ctx, "starting server", slog.String("server", server.name), slog.String("address", server.address))
+
+		go func() {
+			results <- result{name: server.name, err: server.run(ctx)}
+		}()
+	}
+
+	var failure error
+
+	for range servers {
+		res := <-results
+		if res.err == nil {
+			continue
+		}
+
+		slog.ErrorContext(ctx, "server stopped with an error",
+			slog.String("server", res.name), slog.Any("error", errors.WithStack(res.err)))
+
+		failure = res.err
+
+		cancel()
+	}
+
+	return failure
 }
