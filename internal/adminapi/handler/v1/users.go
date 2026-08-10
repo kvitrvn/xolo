@@ -2,6 +2,7 @@ package v1
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/bornholm/xolo/internal/core/model"
@@ -46,12 +47,25 @@ func (h *Handler) handleListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Listing inactive accounts is how a control plane finds the users waiting
+	// for approval when XOLO_HTTP_AUTHN_ACTIVE_BY_DEFAULT is false.
+	var active *bool
+	if raw := query.Get("active"); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, codeInvalidRequest, "active must be true or false")
+			return
+		}
+		active = &parsed
+	}
+
 	offset := page - 1
 
 	users, total, err := h.provisioning.ListUsers(ctx, port.QueryUsersOptions{
 		Page:   &offset,
 		Limit:  &limit,
 		Search: query.Get("search"),
+		Active: active,
 	})
 	if err != nil {
 		writeServiceError(ctx, w, err, "could not list users")

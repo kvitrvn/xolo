@@ -19,6 +19,9 @@ func ContextUser(ctx context.Context) *User {
 	return user
 }
 
-func setContextUser(ctx context.Context, user *User) context.Context {
+// SetContextUser attaches an authenticated identity to the context. The
+// authentication middleware calls it; it is exported so the middlewares reading
+// that identity can be tested without standing up a full authenticator.
+func SetContextUser(ctx context.Context, user *User) context.Context {
 	return context.WithValue(ctx, keyUser, user)
 }

@@ -112,6 +112,7 @@ func NewUser(provider, subject, email string, displayName string, active bool, r
 		provider:    provider,
 		roles:       roles,
 		active:      active,
+		preferences: NewUserPreferences(),
 	}
 }
 

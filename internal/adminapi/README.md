@@ -78,7 +78,7 @@ No `Tenant` business object exists.
 | `GET` | `/v1/tenants/{tenantID}/roles/{roleID}` | |
 | `PUT` | `/v1/tenants/{tenantID}/roles/{roleID}` | Custom roles only |
 | `DELETE` | `/v1/tenants/{tenantID}/roles/{roleID}` | Custom roles only |
-| `GET` | `/v1/users` | `?provider=&subject=` for an exact lookup, otherwise `?search=&page=&limit=` |
+| `GET` | `/v1/users` | `?provider=&subject=` for an exact lookup, otherwise `?search=&active=&page=&limit=` |
 | `PUT` | `/v1/users` | Idempotent upsert on `(provider, subject)`: `201` when created, `200` otherwise |
 | `GET` | `/v1/users/{userID}` | |
 | `PATCH` | `/v1/users/{userID}` | `email`, `displayName`, `active` |
@@ -115,6 +115,22 @@ A user is identified by its `provider` + `subject` tuple, the same key
 interactive authentication uses, so a provisioned user can log in afterwards.
 The API deliberately offers no email-based identity: `email` is a profile field,
 never an identifier.
+
+### Provisioning ahead of the first sign-in
+
+`POST /v1/tenants` creates its owner before that person ever signs in, so the
+account already exists when they do. That requires the caller to know their
+`subject` — the identifier the identity provider assigns them — in advance. It
+works when the control plane also owns the identity provider, or derives the
+subject deterministically.
+
+When the subject cannot be known ahead of time, do not disable
+`XOLO_HTTP_AUTHN_AUTO_CREATE_USERS`: it would lock those people out. Use
+`XOLO_HTTP_AUTHN_ACTIVE_BY_DEFAULT=false` instead. The account is then created
+on first sign-in but stays inactive and grants nothing. The control plane picks
+it up with `GET /v1/users?active=false`, attaches it to a tenant with
+`POST /v1/tenants/{tenantID}/members`, and enables it with
+`PATCH /v1/users/{userID} {"active": true}`.
 
 ## Invariants
 

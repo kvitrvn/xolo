@@ -60,3 +60,32 @@ func TestParse_LegacyOIDCSlotBackwardCompat(t *testing.T) {
 		t.Errorf("unexpected legacy provider: %+v", got[0])
 	}
 }
+
+func TestParse_AutoCreateUsers(t *testing.T) {
+	t.Run("enabled by default", func(t *testing.T) {
+		t.Setenv("XOLO_SECRET_KEY", testSecretKey)
+
+		conf, err := Parse()
+		if err != nil {
+			t.Fatalf("Parse failed: %v", err)
+		}
+
+		if !conf.HTTP.Authn.AutoCreateUsers {
+			t.Error("auto creation of users should be enabled by default")
+		}
+	})
+
+	t.Run("can be disabled", func(t *testing.T) {
+		t.Setenv("XOLO_SECRET_KEY", testSecretKey)
+		t.Setenv("XOLO_HTTP_AUTHN_AUTO_CREATE_USERS", "false")
+
+		conf, err := Parse()
+		if err != nil {
+			t.Fatalf("Parse failed: %v", err)
+		}
+
+		if conf.HTTP.Authn.AutoCreateUsers {
+			t.Error("auto creation of users should be disabled")
+		}
+	})
+}

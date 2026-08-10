@@ -529,6 +529,40 @@ func TestUserEndpoints(t *testing.T) {
 		assertStatus(t, rec, http.StatusNotFound)
 	})
 
+	t.Run("filters on the active flag", func(t *testing.T) {
+		handler, _ := newTestHandler(t)
+
+		active := false
+		call(t, handler, http.MethodPut, "/v1/users", identity)
+		call(t, handler, http.MethodPut, "/v1/users", map[string]any{
+			"provider": "openid-connect",
+			"subject":  "sub-pending",
+			"email":    "pending@acme.tld",
+			"active":   active,
+		})
+
+		rec := call(t, handler, http.MethodGet, "/v1/users?active=false", nil)
+		assertStatus(t, rec, http.StatusOK)
+
+		items := decodeBody(t, rec)["items"].([]any)
+		if len(items) != 1 {
+			t.Fatalf("inactive users: got %d, want 1", len(items))
+		}
+		if email := items[0].(map[string]any)["email"]; email != "pending@acme.tld" {
+			t.Errorf("email: got %v", email)
+		}
+
+		rec = call(t, handler, http.MethodGet, "/v1/users?active=true", nil)
+		assertStatus(t, rec, http.StatusOK)
+		if total := decodeBody(t, rec)["total"]; total != float64(1) {
+			t.Errorf("active users: got %v, want 1", total)
+		}
+
+		rec = call(t, handler, http.MethodGet, "/v1/users?active=maybe", nil)
+		assertStatus(t, rec, http.StatusBadRequest)
+		assertErrorCode(t, rec, "invalid_request")
+	})
+
 	t.Run("never exposes platform role management", func(t *testing.T) {
 		handler, _ := newTestHandler(t)
 
