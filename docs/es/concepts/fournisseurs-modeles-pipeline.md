@@ -1,3 +1,3 @@
 # Proveedores, modelos y pipelines
 
-Esta pagina aun no ha sido traducida. Consulte la version en frances para el contenido completo: [fournisseurs-modeles-pipeline.md](../../fr/concepts/fournisseurs-modeles-pipeline.md).
+Esta pagina aun no ha sido traducida. Consulte la [version en frances](https://xolo-gateway.org/latest/) para el contenido completo.

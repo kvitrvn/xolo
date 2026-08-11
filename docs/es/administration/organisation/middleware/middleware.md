@@ -1,3 +1,3 @@
 # Middlewares
 
-Esta pagina aun no ha sido traducida. Consulte la version en frances para el contenido completo: [middleware.md](../../../../fr/administration/organisation/middleware/middleware.md).
+Esta pagina aun no ha sido traducida. Consulte la [version en frances](https://xolo-gateway.org/latest/) para el contenido completo.

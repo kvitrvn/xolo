@@ -1,3 +1,3 @@
 # Lenguaje de consulta eventql
 
-Esta pagina aun no ha sido traducida. Consulte la version en frances para el contenido completo: [eventql.md](../../fr/concepts/eventql.md).
+Esta pagina aun no ha sido traducida. Consulte la [version en frances](https://xolo-gateway.org/latest/) para el contenido completo.
