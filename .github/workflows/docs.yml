@@ -32,6 +32,7 @@ concurrency:
 jobs:
   dispatch:
     runs-on: ubuntu-latest
+    environment: main
 
     steps:
       - name: Determine dispatch payload
