@@ -9,14 +9,14 @@ import (
 )
 
 type Config struct {
-	Logger       Logger             `envPrefix:"LOGGER_"`
-	HTTP         HTTP               `envPrefix:"HTTP_"`
-	Storage      Storage            `envPrefix:"STORAGE_"`
-	TaskRunner   TaskRunner         `envPrefix:"TASK_RUNNER_"`
-	ExchangeRate ExchangeRateConfig `envPrefix:"EXCHANGE_RATE_"`
-	Plugins      PluginsConfig      `envPrefix:"PLUGINS_"`
-	Events       EventsConfig       `envPrefix:"EVENTS_"`
-	AdminAPI     AdminAPI           `envPrefix:"ADMIN_API_"`
+	Logger           Logger             `envPrefix:"LOGGER_"`
+	HTTP             HTTP               `envPrefix:"HTTP_"`
+	Storage          Storage            `envPrefix:"STORAGE_"`
+	TaskRunner       TaskRunner         `envPrefix:"TASK_RUNNER_"`
+	ExchangeRate     ExchangeRateConfig `envPrefix:"EXCHANGE_RATE_"`
+	Plugins          PluginsConfig      `envPrefix:"PLUGINS_"`
+	Events           EventsConfig       `envPrefix:"EVENTS_"`
+	ProvisionningAPI ProvisionningAPI   `envPrefix:"PROVISIONNING_API_"`
 	// SecretKey is a 32-byte hex string used for AES-GCM encryption of provider API keys.
 	SecretKey string `env:"SECRET_KEY"`
 }
@@ -88,7 +88,7 @@ func (c *Config) Validate() error {
 		return errors.New("XOLO_SECRET_KEY is required but not set (must be a 32-byte hex string, e.g. generated with: openssl rand -hex 32)")
 	}
 
-	if err := c.AdminAPI.Validate(); err != nil {
+	if err := c.ProvisionningAPI.Validate(); err != nil {
 		return errors.WithStack(err)
 	}
 

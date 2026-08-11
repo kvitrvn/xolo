@@ -1,4 +1,4 @@
-package adminapi
+package provisionning
 
 import (
 	"context"
@@ -10,8 +10,8 @@ import (
 	sloghttp "github.com/samber/slog-http"
 )
 
-// Server exposes the instance administration API on its own listener, with its
-// own TLS configuration and its own middleware chain.
+// Server exposes the Provisionning API on its own listener, with its own TLS
+// configuration and its own middleware chain.
 //
 // It deliberately shares nothing with the public HTTP server beyond the process
 // and its root context: no CORS, no cookie, no color scheme, no session, no
@@ -39,10 +39,10 @@ func (s *Server) Addr() string {
 // the configured timeout.
 func (s *Server) Run(ctx context.Context) error {
 	if s.opts.TLSConfig == nil {
-		return errors.New("admin api server requires a TLS configuration")
+		return errors.New("provisionning api server requires a TLS configuration")
 	}
 	if s.opts.Handler == nil {
-		return errors.New("admin api server requires a handler")
+		return errors.New("provisionning api server requires a handler")
 	}
 
 	handler := requireClientCert(s.opts.Handler)
@@ -68,7 +68,7 @@ func (s *Server) Run(ctx context.Context) error {
 		defer cancel()
 
 		if err := server.Shutdown(shutdownCtx); err != nil {
-			slog.ErrorContext(ctx, "could not gracefully shutdown admin api server", slogx.Error(errors.WithStack(err)))
+			slog.ErrorContext(ctx, "could not gracefully shutdown provisionning api server", slogx.Error(errors.WithStack(err)))
 		}
 	}()
 

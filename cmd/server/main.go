@@ -58,14 +58,14 @@ func main() {
 		{name: "http", address: conf.HTTP.Address, run: httpServer.Run},
 	}
 
-	// Nil when the Admin API is disabled: the public server then runs alone.
-	adminAPIServer, err := setup.NewAdminAPIServerFromConfig(ctx, conf)
+	// Nil when the Provisionning API is disabled: the public server then runs alone.
+	provisionningAPIServer, err := setup.NewProvisionningAPIServerFromConfig(ctx, conf)
 	if err != nil {
-		slog.ErrorContext(ctx, "could not setup admin api server", slog.Any("error", errors.WithStack(err)))
+		slog.ErrorContext(ctx, "could not setup provisionning api server", slog.Any("error", errors.WithStack(err)))
 		os.Exit(1)
 	}
-	if adminAPIServer != nil {
-		servers = append(servers, namedServer{name: "admin-api", address: conf.AdminAPI.Address, run: adminAPIServer.Run})
+	if provisionningAPIServer != nil {
+		servers = append(servers, namedServer{name: "provisionning-api", address: conf.ProvisionningAPI.Address, run: provisionningAPIServer.Run})
 	}
 
 	if err := run(ctx, cancel, servers); err != nil {

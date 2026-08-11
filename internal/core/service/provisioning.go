@@ -367,7 +367,7 @@ type UpdateUserParams struct {
 }
 
 // UpdateUser updates the profile fields of a user. Platform roles are
-// deliberately not exposed: the Admin API never grants instance-wide privileges.
+// deliberately not exposed: the Provisionning API never grants instance-wide privileges.
 func (s *ProvisioningService) UpdateUser(ctx context.Context, userID model.UserID, params UpdateUserParams) (model.User, error) {
 	user, err := s.userStore.GetUserByID(ctx, userID)
 	if err != nil {
@@ -502,7 +502,7 @@ func (s *ProvisioningService) ListMembers(ctx context.Context, orgID model.OrgID
 }
 
 // GetMember returns a membership scoped to the given tenant. A membership
-// belonging to another tenant is reported as not found: the Admin API must not
+// belonging to another tenant is reported as not found: the Provisionning API must not
 // let a caller probe another tenant's identifiers.
 func (s *ProvisioningService) GetMember(ctx context.Context, orgID model.OrgID, membershipID model.MembershipID) (model.Membership, error) {
 	membership, err := s.orgStore.GetMembership(ctx, membershipID)

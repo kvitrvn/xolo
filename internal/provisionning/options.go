@@ -1,4 +1,4 @@
-package adminapi
+package provisionning
 
 import (
 	"crypto/tls"
@@ -12,7 +12,7 @@ type Options struct {
 	Address string
 
 	// TLSConfig carries the server certificate and the client certificate
-	// verification policy. It is required: the Admin API never serves plain HTTP.
+	// verification policy. It is required: the Provisionning API never serves plain HTTP.
 	TLSConfig *tls.Config
 
 	// Handler serves the API routes. It is mounted behind the client

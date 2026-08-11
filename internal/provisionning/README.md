@@ -1,6 +1,6 @@
-# Admin API — instance administration (management plane)
+# Provisionning API — instance administration (management plane)
 
-The Admin API lets an external system provision and reconcile a Xolo instance
+The Provisionning API lets an external system provision and reconcile a Xolo instance
 without any human interaction: a control plane, a Kubernetes operator, a
 Terraform provider, an Ansible playbook or a plain script.
 
@@ -12,20 +12,20 @@ chain and its own authentication mechanism.
 ```
 Xolo process
 ├── http.Server (internal/http)          Web UI, OIDC, /api/v1, LLM proxy
-└── adminapi.Server (internal/adminapi)  dedicated listener + port + mutual TLS
+└── provisionning.Server (internal/provisionning)  dedicated listener + port + mutual TLS
         └── handler/v1                   transport only
                 └── service.ProvisioningService   (internal/core/service)
                         └── port.OrgStore / UserStore / RoleStore
 ```
 
-Both servers share the root context of `cmd/server`, and the Admin API uses the
+Both servers share the root context of `cmd/server`, and the Provisionning API uses the
 **same store instances** as the public server (cache and event decorators
 included): no second database connection, no second repository implementation.
 
 ## Authentication
 
 Mutual TLS, and nothing else. There is no OIDC, no session, no cookie and no
-user API token on this port, and no Admin API endpoint is ever mounted on the
+user API token on this port, and no Provisionning API endpoint is ever mounted on the
 public HTTP port. There is no anonymous fallback.
 
 The listener is configured with `tls.RequireAndVerifyClientCert`, so the TLS
@@ -47,12 +47,12 @@ first-request failure.
 
 | Variable | Default | Description |
 |---|---|---|
-| `XOLO_ADMIN_API_ENABLED` | `false` | Opens the administration listener |
-| `XOLO_ADMIN_API_ADDRESS` | `:3003` | Listen address |
-| `XOLO_ADMIN_API_TLS_CERT_FILE` | — | Server certificate (PEM), required when enabled |
-| `XOLO_ADMIN_API_TLS_KEY_FILE` | — | Server private key (PEM), required when enabled |
-| `XOLO_ADMIN_API_TLS_CLIENT_CA_FILE` | — | Authority verifying client certificates, required when enabled |
-| `XOLO_ADMIN_API_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown budget |
+| `XOLO_PROVISIONNING_API_ENABLED` | `false` | Opens the administration listener |
+| `XOLO_PROVISIONNING_API_ADDRESS` | `:3003` | Listen address |
+| `XOLO_PROVISIONNING_API_TLS_CERT_FILE` | — | Server certificate (PEM), required when enabled |
+| `XOLO_PROVISIONNING_API_TLS_KEY_FILE` | — | Server private key (PEM), required when enabled |
+| `XOLO_PROVISIONNING_API_TLS_CLIENT_CA_FILE` | — | Authority verifying client certificates, required when enabled |
+| `XOLO_PROVISIONNING_API_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown budget |
 
 ## Endpoints
 
@@ -185,10 +185,10 @@ openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
 
 ```bash
 XOLO_SECRET_KEY=$(openssl rand -hex 32) \
-XOLO_ADMIN_API_ENABLED=true \
-XOLO_ADMIN_API_TLS_CERT_FILE=dev-pki/server.crt \
-XOLO_ADMIN_API_TLS_KEY_FILE=dev-pki/server.key \
-XOLO_ADMIN_API_TLS_CLIENT_CA_FILE=dev-pki/ca.crt \
+XOLO_PROVISIONNING_API_ENABLED=true \
+XOLO_PROVISIONNING_API_TLS_CERT_FILE=dev-pki/server.crt \
+XOLO_PROVISIONNING_API_TLS_KEY_FILE=dev-pki/server.key \
+XOLO_PROVISIONNING_API_TLS_CLIENT_CA_FILE=dev-pki/ca.crt \
 bin/server
 
 # Refused: no client certificate
@@ -207,7 +207,7 @@ curl -s --cacert dev-pki/ca.crt --cert dev-pki/client.crt --key dev-pki/client.k
   `port.*Store`: exposing them means adding a handler file and its DTOs, with no
   architectural change.
 - Per-certificate scopes.
-- Admin API mutations emit no Xolo event (they are logged server-side). This is
+- Provisionning API mutations emit no Xolo event (they are logged server-side). This is
   the documented behavior of the event decorators when no user is in context.
 - Email pre-provisioning: the existing `InviteToken` mechanism remains the email
   path, through the Web UI.

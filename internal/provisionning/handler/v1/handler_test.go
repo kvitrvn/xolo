@@ -9,9 +9,9 @@ import (
 	"testing"
 
 	xologorm "github.com/bornholm/xolo/internal/adapter/gorm"
-	v1 "github.com/bornholm/xolo/internal/adminapi/handler/v1"
 	"github.com/bornholm/xolo/internal/core/rbac"
 	"github.com/bornholm/xolo/internal/core/service"
+	v1 "github.com/bornholm/xolo/internal/provisionning/handler/v1"
 	_ "github.com/ncruces/go-sqlite3/embed"
 	"github.com/ncruces/go-sqlite3/gormlite"
 	gormpkg "gorm.io/gorm"

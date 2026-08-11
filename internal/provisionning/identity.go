@@ -1,12 +1,12 @@
-package adminapi
+package provisionning
 
 import (
 	"context"
 	"crypto/x509"
 )
 
-// ClientIdentity describes the client certificate that authenticated an Admin
-// API request.
+// ClientIdentity describes the client certificate that authenticated a
+// Provisionning API request.
 //
 // It carries no authorization decision: any client holding a certificate signed
 // by the configured authority administers the instance. It is recorded so

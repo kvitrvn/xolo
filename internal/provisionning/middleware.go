@@ -1,4 +1,4 @@
-package adminapi
+package provisionning
 
 import (
 	"log/slog"
@@ -21,7 +21,7 @@ const unauthorizedBody = `{"error":{"code":"unauthorized","message":"a valid cli
 func requireClientCert(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
-			slog.WarnContext(r.Context(), "rejecting admin api request without client certificate",
+			slog.WarnContext(r.Context(), "rejecting provisionning api request without client certificate",
 				slog.String("remoteAddr", r.RemoteAddr), slog.String("path", r.URL.Path))
 
 			w.Header().Set("Content-Type", "application/json")

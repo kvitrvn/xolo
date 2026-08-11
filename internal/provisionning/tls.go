@@ -1,4 +1,4 @@
-package adminapi
+package provisionning
 
 import (
 	"crypto/tls"
@@ -8,7 +8,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-// LoadTLSConfig builds the mutual TLS configuration of the Admin API listener.
+// LoadTLSConfig builds the mutual TLS configuration of the Provisionning API listener.
 //
 // It is called at startup, before the listener is opened, so a misconfigured
 // certificate, key or CA bundle fails the process immediately rather than on

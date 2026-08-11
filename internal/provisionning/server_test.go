@@ -1,4 +1,4 @@
-package adminapi_test
+package provisionning_test
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bornholm/xolo/internal/adminapi"
+	"github.com/bornholm/xolo/internal/provisionning"
 )
 
 func TestLoadTLSConfig(t *testing.T) {
@@ -21,7 +21,7 @@ func TestLoadTLSConfig(t *testing.T) {
 	serverCert, serverKey := pki.issue(t, "server", true)
 
 	t.Run("requires and verifies client certificates", func(t *testing.T) {
-		tlsConfig, err := adminapi.LoadTLSConfig(serverCert, serverKey, pki.caCertFile)
+		tlsConfig, err := provisionning.LoadTLSConfig(serverCert, serverKey, pki.caCertFile)
 		if err != nil {
 			t.Fatalf("load tls config: %v", err)
 		}
@@ -58,7 +58,7 @@ func TestLoadTLSConfig(t *testing.T) {
 			"ca without pem": {serverCert, serverKey, emptyCA},
 		} {
 			t.Run(name, func(t *testing.T) {
-				if _, err := adminapi.LoadTLSConfig(args[0], args[1], args[2]); err == nil {
+				if _, err := provisionning.LoadTLSConfig(args[0], args[1], args[2]); err == nil {
 					t.Error("an error was expected")
 				}
 			})
@@ -82,13 +82,13 @@ func TestServerMutualTLS(t *testing.T) {
 	rogue := newTestPKI(t, "rogue-ca")
 	rogueCert, rogueKey := rogue.issue(t, "rogue-client", false)
 
-	tlsConfig, err := adminapi.LoadTLSConfig(serverCert, serverKey, pki.caCertFile)
+	tlsConfig, err := provisionning.LoadTLSConfig(serverCert, serverKey, pki.caCertFile)
 	if err != nil {
 		t.Fatalf("load tls config: %v", err)
 	}
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		identity, ok := adminapi.CurrentClientIdentity(r.Context())
+		identity, ok := provisionning.CurrentClientIdentity(r.Context())
 		if !ok {
 			t.Error("client identity should be available in the request context")
 			w.WriteHeader(http.StatusInternalServerError)
@@ -148,23 +148,23 @@ func TestServerMutualTLS(t *testing.T) {
 func TestServerRequiresConfiguration(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
 
-	if err := adminapi.NewServer(adminapi.WithHandler(handler)).Run(context.Background()); err == nil {
+	if err := provisionning.NewServer(provisionning.WithHandler(handler)).Run(context.Background()); err == nil {
 		t.Error("a server without TLS configuration should refuse to run")
 	}
 
 	pki := newTestPKI(t, "xolo-test-ca")
 	serverCert, serverKey := pki.issue(t, "server", true)
-	tlsConfig, err := adminapi.LoadTLSConfig(serverCert, serverKey, pki.caCertFile)
+	tlsConfig, err := provisionning.LoadTLSConfig(serverCert, serverKey, pki.caCertFile)
 	if err != nil {
 		t.Fatalf("load tls config: %v", err)
 	}
 
-	if err := adminapi.NewServer(adminapi.WithTLSConfig(tlsConfig)).Run(context.Background()); err == nil {
+	if err := provisionning.NewServer(provisionning.WithTLSConfig(tlsConfig)).Run(context.Background()); err == nil {
 		t.Error("a server without handler should refuse to run")
 	}
 }
 
-// startServer runs an Admin API server on an ephemeral port and returns its
+// startServer runs a Provisionning API server on an ephemeral port and returns its
 // base URL. It is stopped when the test ends.
 func startServer(t *testing.T, tlsConfig *tls.Config, handler http.Handler) string {
 	t.Helper()
@@ -174,11 +174,11 @@ func startServer(t *testing.T, tlsConfig *tls.Config, handler http.Handler) stri
 		t.Fatalf("listen: %v", err)
 	}
 
-	server := adminapi.NewServer(
-		adminapi.WithTLSConfig(tlsConfig),
-		adminapi.WithHandler(handler),
-		adminapi.WithListener(listener),
-		adminapi.WithShutdownTimeout(time.Second),
+	server := provisionning.NewServer(
+		provisionning.WithTLSConfig(tlsConfig),
+		provisionning.WithHandler(handler),
+		provisionning.WithListener(listener),
+		provisionning.WithShutdownTimeout(time.Second),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())

@@ -1,4 +1,4 @@
-package adminapi_test
+package provisionning_test
 
 import (
 	"crypto/ecdsa"

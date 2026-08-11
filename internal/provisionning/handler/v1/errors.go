@@ -42,7 +42,7 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	}
 
 	if err := json.NewEncoder(w).Encode(payload); err != nil {
-		slog.Error("could not encode admin api response", slogx.Error(errors.WithStack(err)))
+		slog.Error("could not encode provisionning api response", slogx.Error(errors.WithStack(err)))
 	}
 }
 
@@ -61,12 +61,12 @@ func writeServiceError(ctx context.Context, w http.ResponseWriter, err error, fa
 	status, code := statusFromError(err)
 
 	if status == http.StatusInternalServerError {
-		slog.ErrorContext(ctx, "admin api request failed", slogx.Error(err))
+		slog.ErrorContext(ctx, "provisionning api request failed", slogx.Error(err))
 		writeError(w, status, code, "an unexpected error occurred")
 		return
 	}
 
-	slog.DebugContext(ctx, "admin api request refused", slog.Int("status", status), slogx.Error(err))
+	slog.DebugContext(ctx, "provisionning api request refused", slog.Int("status", status), slogx.Error(err))
 
 	message := fallback
 	if detail := sentinelMessage(err); detail != "" {

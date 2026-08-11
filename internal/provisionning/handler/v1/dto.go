@@ -47,8 +47,8 @@ type userDTO struct {
 	DisplayName string `json:"displayName"`
 	Active      bool   `json:"active"`
 
-	// PlatformRoles are instance-wide roles. They are read-only here: the Admin
-	// API never grants platform privileges.
+	// PlatformRoles are instance-wide roles. They are read-only here: the
+	// Provisionning API never grants platform privileges.
 	PlatformRoles []string `json:"platformRoles"`
 }
 
