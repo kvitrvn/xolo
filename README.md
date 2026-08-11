@@ -12,20 +12,15 @@ _Guiding your enterprise safely to the realm of AI._
 
 ## Features
 
-- **Authenticate** users via OIDC with email-based role mapping and access whitelist
-- **Proxy** OpenAI-compatible LLM requests via the [genai](https://github.com/Bornholm/genai) proxy layer
+- **Authenticate** users via OIDC
+- **Proxy** OpenAI-compatible LLM requests
 - **Control** usage with fine-grained quotas for users
-- **Monitor** everything — keep full visibility over your AI usage
-- **Deploy** anywhere — self-hosted, on-premise, fully under your control
-
-## Getting started
-
-> TODO
+- **Monitor** everything, keep full visibility over your AI usage
+- **Deploy** anywhere, self-hosted, on-premise, fully under your control
 
 ## Documentation
 
-- [Plugin system presentation](./docs/plugin-tutorial.md)
-- [Request energy cost estimation principles](./docs/energy-cost-estimation.md)
+See [`docs/`](./docs/)
 
 ## License
 
