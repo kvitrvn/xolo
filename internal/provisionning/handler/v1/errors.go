@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/bornholm/go-x/slogx"
-	"github.com/bornholm/xolo/internal/core/port"
+	"github.com/xolo-gateway/xolo/internal/core/port"
 	"github.com/pkg/errors"
 )
 

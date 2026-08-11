@@ -3,8 +3,8 @@ package v1
 import (
 	"time"
 
-	"github.com/bornholm/xolo/internal/core/model"
-	"github.com/bornholm/xolo/internal/core/rbac"
+	"github.com/xolo-gateway/xolo/internal/core/model"
+	"github.com/xolo-gateway/xolo/internal/core/rbac"
 )
 
 // The API exposes its own representations: the domain interfaces are never

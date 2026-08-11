@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bornholm/xolo/internal/provisionning"
+	"github.com/xolo-gateway/xolo/internal/provisionning"
 )
 
 func TestLoadTLSConfig(t *testing.T) {

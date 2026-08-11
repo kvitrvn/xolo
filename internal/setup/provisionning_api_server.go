@@ -3,9 +3,9 @@ package setup
 import (
 	"context"
 
-	"github.com/bornholm/xolo/internal/config"
-	"github.com/bornholm/xolo/internal/provisionning"
-	v1 "github.com/bornholm/xolo/internal/provisionning/handler/v1"
+	"github.com/xolo-gateway/xolo/internal/config"
+	"github.com/xolo-gateway/xolo/internal/provisionning"
+	v1 "github.com/xolo-gateway/xolo/internal/provisionning/handler/v1"
 	"github.com/pkg/errors"
 )
 
