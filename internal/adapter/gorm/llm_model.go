@@ -15,7 +15,8 @@ type LLMModel struct {
 	ProxyName                 string `gorm:"uniqueIndex:idx_org_proxy;not null"`
 	RealModel                 string `gorm:"not null"`
 	Description               string
-	Enabled                   int                                `gorm:"default:1"`
+	// See the note on Organization.Active: no `default` here on purpose.
+	Enabled                   int
 	PromptCostPer1KTokens        int64 `gorm:"default:0"`
 	CachedPromptCostPer1KTokens  int64 `gorm:"default:0"`
 	CompletionCostPer1KTokens    int64 `gorm:"default:0"`

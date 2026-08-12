@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	xologorm "github.com/xolo-gateway/xolo/internal/adapter/gorm"
 	"github.com/xolo-gateway/xolo/internal/core/eventql"
 	"github.com/xolo-gateway/xolo/internal/core/model"
 	"github.com/xolo-gateway/xolo/internal/core/port"
@@ -12,7 +13,10 @@ import (
 func ptr[T any](v T) *T { return &v }
 
 func TestEventStore_VisibilityAndQuery(t *testing.T) {
-	store := newTestStore(t)
+	eachBackend(t, scenarioEventStore_VisibilityAndQuery)
+}
+
+func scenarioEventStore_VisibilityAndQuery(t *testing.T, store *xologorm.Store) {
 	ctx := context.Background()
 	org := model.OrgID("org1")
 
@@ -83,7 +87,10 @@ func TestEventStore_VisibilityAndQuery(t *testing.T) {
 }
 
 func TestEventStore_EvictOverflow(t *testing.T) {
-	store := newTestStore(t)
+	eachBackend(t, scenarioEventStore_EvictOverflow)
+}
+
+func scenarioEventStore_EvictOverflow(t *testing.T, store *xologorm.Store) {
 	ctx := context.Background()
 	org := model.OrgID("org1")
 

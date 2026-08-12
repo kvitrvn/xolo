@@ -6,7 +6,6 @@ import (
 
 	"github.com/xolo-gateway/xolo/internal/core/model"
 	"github.com/xolo-gateway/xolo/internal/core/port"
-	"github.com/ncruces/go-sqlite3"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 )
@@ -15,7 +14,7 @@ import (
 func (s *Store) CreateAlert(ctx context.Context, alert model.Alert) error {
 	return s.withRetry(ctx, true, func(ctx context.Context, db *gorm.DB) error {
 		return errors.WithStack(db.Create(fromAlert(alert)).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // UpdateAlert implements port.AlertStore.
@@ -23,7 +22,7 @@ func (s *Store) UpdateAlert(ctx context.Context, alert model.Alert) error {
 	return s.withRetry(ctx, true, func(ctx context.Context, db *gorm.DB) error {
 		result := db.Model(&Alert{}).Where("id = ?", string(alert.ID())).Save(fromAlert(alert))
 		return errors.WithStack(result.Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // DeleteAlert implements port.AlertStore.
@@ -37,7 +36,7 @@ func (s *Store) DeleteAlert(ctx context.Context, id model.AlertID) error {
 			return errors.WithStack(port.ErrNotFound)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // GetAlertByID implements port.AlertStore.
@@ -51,7 +50,7 @@ func (s *Store) GetAlertByID(ctx context.Context, id model.AlertID) (model.Alert
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +63,7 @@ func (s *Store) ListAlerts(ctx context.Context, orgID model.OrgID) ([]model.Aler
 	err := s.withRetry(ctx, false, func(ctx context.Context, db *gorm.DB) error {
 		return errors.WithStack(db.Where("org_id = ?", string(orgID)).
 			Order("created_at DESC").Find(&alerts).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -79,8 +78,8 @@ func (s *Store) ListAlerts(ctx context.Context, orgID model.OrgID) ([]model.Aler
 func (s *Store) ListEnabledAlerts(ctx context.Context) ([]model.Alert, error) {
 	var alerts []*Alert
 	err := s.withRetry(ctx, false, func(ctx context.Context, db *gorm.DB) error {
-		return errors.WithStack(db.Where("enabled = 1").Find(&alerts).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+		return errors.WithStack(db.Where("enabled = ?", true).Find(&alerts).Error)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -100,14 +99,14 @@ func (s *Store) UpdateAlertState(ctx context.Context, id model.AlertID, state mo
 				"pending_since":     pendingSince,
 				"last_evaluated_at": lastEvaluatedAt,
 			}).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // CreateIncident implements port.AlertIncidentStore.
 func (s *Store) CreateIncident(ctx context.Context, incident model.AlertIncident) error {
 	return s.withRetry(ctx, true, func(ctx context.Context, db *gorm.DB) error {
 		return errors.WithStack(db.Create(fromAlertIncident(incident)).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // ResolveIncident implements port.AlertIncidentStore.
@@ -122,7 +121,7 @@ func (s *Store) ResolveIncident(ctx context.Context, id model.AlertIncidentID, r
 			return errors.WithStack(port.ErrNotFound)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // UpdateIncidentPeak implements port.AlertIncidentStore.
@@ -131,7 +130,7 @@ func (s *Store) UpdateIncidentPeak(ctx context.Context, id model.AlertIncidentID
 		return errors.WithStack(db.Model(&AlertIncident{}).
 			Where("id = ? AND peak_value < ?", string(id), peak).
 			Update("peak_value", peak).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // GetOpenIncident implements port.AlertIncidentStore.
@@ -146,7 +145,7 @@ func (s *Store) GetOpenIncident(ctx context.Context, alertID model.AlertID) (mod
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +174,7 @@ func (s *Store) ListIncidents(ctx context.Context, filter port.IncidentFilter) (
 			query = query.Offset(*filter.Offset)
 		}
 		return errors.WithStack(query.Find(&incidents).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}

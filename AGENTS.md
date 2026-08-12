@@ -14,8 +14,9 @@ make watch                    # hot-reload dev server via modd
 make CMD='bin/server' run-with-env
 
 # Test
-go test ./...
+go test ./...                  # unit tests, SQLite only, no Docker needed
 go test ./internal/adapter/memory/...  # single package
+make test-integration         # store suite on BOTH backends (PostgreSQL via testcontainers, needs Docker; run by the `integration` CI job)
 make seed                     # generates e2e.sqlite, a deterministic E2E fixture (see cmd/seed/README.md)
 
 # Release
@@ -36,7 +37,8 @@ internal/
     model/      — domain types: User, AuthToken, Task
     port/       — interfaces: UserStore, TaskRunner, error sentinels
   adapter/
-    gorm/       — SQLite/GORM implementation of UserStore
+    gorm/       — GORM implementation of the stores (SQLite or PostgreSQL, see internal/adapter/gorm/dialect.go)
+                  store tests go through eachBackend() so every behaviour is asserted on both backends
     cache/      — LRU cache wrappers for UserStore
     memory/     — in-memory TaskRunner implementation
   http/

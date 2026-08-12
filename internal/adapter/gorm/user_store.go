@@ -7,7 +7,6 @@ import (
 
 	"github.com/xolo-gateway/xolo/internal/core/model"
 	"github.com/xolo-gateway/xolo/internal/core/port"
-	"github.com/ncruces/go-sqlite3"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -53,7 +52,7 @@ func (s *Store) FindOrCreateUser(ctx context.Context, provider, subject string) 
 
 		user = &wrappedUser{&u}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -73,7 +72,7 @@ func (s *Store) GetUserByID(ctx context.Context, userID model.UserID) (model.Use
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.LOCKED, sqlite3.BUSY)
+	})
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -91,8 +90,7 @@ func (s *Store) SaveUser(ctx context.Context, user model.User) error {
 			Columns:   []clause.Column{{Name: "id"}},
 			UpdateAll: true,
 		}).Omit("Roles", "Preferences").Create(gormUser).Error; err != nil {
-			var sqliteErr *sqlite3.Error
-			if errors.As(err, &sqliteErr) && sqliteErr.Code() == sqlite3.CONSTRAINT && strings.Contains(sqliteErr.Error(), "users.email") {
+			if isUniqueViolation(err, "users", "email") {
 				return errors.Wrapf(port.ErrAlreadyExists, "email %q is already used by another user", gormUser.Email)
 			}
 
@@ -129,7 +127,7 @@ func (s *Store) SaveUser(ctx context.Context, user model.User) error {
 		}
 
 		return nil
-	}, sqlite3.LOCKED, sqlite3.BUSY)
+	})
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -149,7 +147,7 @@ func (s *Store) FindAuthToken(ctx context.Context, token string) (model.AuthToke
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.LOCKED, sqlite3.BUSY)
+	})
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -171,7 +169,7 @@ func (s *Store) GetUserAuthTokens(ctx context.Context, userID model.UserID) ([]m
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.LOCKED, sqlite3.BUSY)
+	})
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -194,7 +192,7 @@ func (s *Store) CreateAuthToken(ctx context.Context, token model.AuthToken) erro
 		}
 
 		return nil
-	}, sqlite3.LOCKED, sqlite3.BUSY)
+	})
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -215,7 +213,7 @@ func (s *Store) DeleteAuthToken(ctx context.Context, tokenID model.AuthTokenID) 
 		}
 
 		return nil
-	}, sqlite3.LOCKED, sqlite3.BUSY)
+	})
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -236,7 +234,7 @@ func (s *Store) DeleteUser(ctx context.Context, userID model.UserID) error {
 		}
 
 		return nil
-	}, sqlite3.LOCKED, sqlite3.BUSY)
+	})
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -286,7 +284,7 @@ func (s *Store) CountUsers(ctx context.Context, opts port.QueryUsersOptions) (in
 		query = applyUserSearch(query, opts.Search)
 
 		return errors.WithStack(query.Count(&count).Error)
-	}, sqlite3.LOCKED, sqlite3.BUSY)
+	})
 	if err != nil {
 		return 0, errors.WithStack(err)
 	}
@@ -337,7 +335,7 @@ func (s *Store) QueryUsers(ctx context.Context, opts port.QueryUsersOptions) ([]
 		}
 
 		return nil
-	}, sqlite3.LOCKED, sqlite3.BUSY)
+	})
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

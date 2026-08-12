@@ -9,6 +9,30 @@ import (
 	"gorm.io/gorm"
 )
 
+// withoutForeignKeys runs fn with foreign key enforcement disabled on SQLite,
+// where AutoMigrate rebuilds tables through INSERT...SELECT into a temporary
+// table and would otherwise trip FK checks on legacy rows. Other backends
+// migrate columns in place and need no such workaround, so fn runs as-is.
+func withoutForeignKeys(tx *gorm.DB, fn func() error) error {
+	if !isSQLite(tx) {
+		return fn()
+	}
+
+	if err := tx.Exec("PRAGMA foreign_keys=off").Error; err != nil {
+		return errors.WithStack(err)
+	}
+
+	if err := fn(); err != nil {
+		return errors.WithStack(err)
+	}
+
+	if err := tx.Exec("PRAGMA foreign_keys=on").Error; err != nil {
+		return errors.WithStack(err)
+	}
+
+	return nil
+}
+
 func createGetDatabase(db *gorm.DB) func(ctx context.Context) (*gorm.DB, error) {
 	var (
 		migrateOnce sync.Once
@@ -73,30 +97,23 @@ func createGetDatabase(db *gorm.DB) func(ctx context.Context) (*gorm.DB, error) 
 					// deprecated column.
 					ID: "202606250001",
 					Migrate: func(tx *gorm.DB) error {
-						// Disable foreign keys while rebuilding tables: gormlite/SQLite
-						// recreates tables via INSERT...SELECT into a temp table, which
-						// would otherwise fail FK checks on legacy rows.
-						if err := tx.Exec("PRAGMA foreign_keys=off").Error; err != nil {
-							return errors.WithStack(err)
-						}
-						if err := tx.SetupJoinTable(&Membership{}, "Roles", &MembershipRole{}); err != nil {
-							return errors.WithStack(err)
-						}
-						if err := tx.AutoMigrate(&Role{}, &RolePermission{}, &RoleModel{}, &MembershipRole{}); err != nil {
-							return errors.WithStack(err)
-						}
-						if err := migrateLegacyMembershipRoles(tx); err != nil {
-							return errors.WithStack(err)
-						}
-						if tx.Migrator().HasColumn(&Membership{}, "role") {
-							if err := tx.Migrator().DropColumn(&Membership{}, "role"); err != nil {
+						return withoutForeignKeys(tx, func() error {
+							if err := tx.SetupJoinTable(&Membership{}, "Roles", &MembershipRole{}); err != nil {
 								return errors.WithStack(err)
 							}
-						}
-						if err := tx.Exec("PRAGMA foreign_keys=on").Error; err != nil {
-							return errors.WithStack(err)
-						}
-						return nil
+							if err := tx.AutoMigrate(&Role{}, &RolePermission{}, &RoleModel{}, &MembershipRole{}); err != nil {
+								return errors.WithStack(err)
+							}
+							if err := migrateLegacyMembershipRoles(tx); err != nil {
+								return errors.WithStack(err)
+							}
+							if tx.Migrator().HasColumn(&Membership{}, "role") {
+								if err := tx.Migrator().DropColumn(&Membership{}, "role"); err != nil {
+									return errors.WithStack(err)
+								}
+							}
+							return nil
+						})
 					},
 					Rollback: func(tx *gorm.DB) error {
 						return tx.Migrator().DropTable("membership_roles", "role_models", "role_permissions", "roles")
@@ -214,58 +231,48 @@ func createGetDatabase(db *gorm.DB) func(ctx context.Context) (*gorm.DB, error) 
 			})
 
 			m.InitSchema(func(tx *gorm.DB) error {
-				// Disable foreign keys during schema migration to avoid
-				// FK constraint failures when copying data between tables
-				// during AutoMigrate (SQLite issue with INSERT...SELECT)
-				if err := tx.Exec("PRAGMA foreign_keys=off").Error; err != nil {
-					return errors.WithStack(err)
-				}
+				return withoutForeignKeys(tx, func() error {
+					// Drop the deprecated index if exists (used in old migration)
+					tx.Exec("DROP INDEX IF EXISTS " + tx.Statement.Quote("idx_users_email"))
 
-				// Drop the deprecated index if exists (used in old migration)
-				tx.Exec("DROP INDEX IF EXISTS `idx_users_email`")
+					if err := tx.SetupJoinTable(&Membership{}, "Roles", &MembershipRole{}); err != nil {
+						return errors.WithStack(err)
+					}
 
-				if err := tx.SetupJoinTable(&Membership{}, "Roles", &MembershipRole{}); err != nil {
-					return errors.WithStack(err)
-				}
+					err := tx.AutoMigrate(
+						// User store
+						&User{}, &AuthToken{}, &UserRole{}, &UserPreferences{},
+						// Org store
+						&Organization{}, &Membership{}, &Application{},
+						// RBAC store
+						&Role{}, &RolePermission{}, &RoleModel{}, &MembershipRole{}, &ApplicationRole{},
+						// Provider store
+						&Provider{}, &LLMModel{},
+						// Virtual model store
+						&VirtualModel{},
+						// Middleware store
+						&Middleware{},
+						// Personal virtual model store
+						&PersonalVirtualModel{},
+						// Quota store
+						&Quota{},
+						// Usage store
+						&UsageRecord{},
+						// Invite store
+						&InviteToken{},
+						// Exchange rate cache
+						&ExchangeRate{},
+						// Plugin node secrets
+						&PluginNodeSecret{},
+						// Event system
+						&Event{}, &Alert{}, &AlertIncident{}, &EventSettings{},
+					)
+					if err != nil {
+						return errors.WithStack(err)
+					}
 
-				err := tx.AutoMigrate(
-					// User store
-					&User{}, &AuthToken{}, &UserRole{}, &UserPreferences{},
-					// Org store
-					&Organization{}, &Membership{}, &Application{},
-					// RBAC store
-					&Role{}, &RolePermission{}, &RoleModel{}, &MembershipRole{}, &ApplicationRole{},
-					// Provider store
-					&Provider{}, &LLMModel{},
-					// Virtual model store
-					&VirtualModel{},
-					// Middleware store
-					&Middleware{},
-					// Personal virtual model store
-					&PersonalVirtualModel{},
-					// Quota store
-					&Quota{},
-					// Usage store
-					&UsageRecord{},
-					// Invite store
-					&InviteToken{},
-					// Exchange rate cache
-					&ExchangeRate{},
-					// Plugin node secrets
-					&PluginNodeSecret{},
-					// Event system
-					&Event{}, &Alert{}, &AlertIncident{}, &EventSettings{},
-				)
-				if err != nil {
-					return errors.WithStack(err)
-				}
-
-				// Re-enable foreign keys after schema migration
-				if err := tx.Exec("PRAGMA foreign_keys=on").Error; err != nil {
-					return errors.WithStack(err)
-				}
-
-				return nil
+					return nil
+				})
 			})
 
 			migrateErr = m.Migrate()

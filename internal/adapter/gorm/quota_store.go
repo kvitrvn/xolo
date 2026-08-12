@@ -5,7 +5,6 @@ import (
 
 	"github.com/xolo-gateway/xolo/internal/core/model"
 	"github.com/xolo-gateway/xolo/internal/core/port"
-	"github.com/ncruces/go-sqlite3"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -18,7 +17,7 @@ func (s *Store) SetQuota(ctx context.Context, quota model.Quota) error {
 			Columns:   []clause.Column{{Name: "scope"}, {Name: "scope_id"}},
 			UpdateAll: true,
 		}).Create(fromQuota(quota)).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // GetQuota implements port.QuotaStore.
@@ -32,7 +31,7 @@ func (s *Store) GetQuota(ctx context.Context, scope model.QuotaScope, scopeID st
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	xologorm "github.com/xolo-gateway/xolo/internal/adapter/gorm"
 	"github.com/xolo-gateway/xolo/internal/core/model"
 	"github.com/xolo-gateway/xolo/internal/core/port"
 )
@@ -34,7 +35,10 @@ func costByKey(rows []port.DimensionCost) map[string]int64 {
 }
 
 func TestAggregateCostByDimension(t *testing.T) {
-	store := newTestStore(t)
+	eachBackend(t, scenarioAggregateCostByDimension)
+}
+
+func scenarioAggregateCostByDimension(t *testing.T, store *xologorm.Store) {
 	ctx := context.Background()
 	orgID := model.OrgID("org-1")
 
@@ -129,7 +133,10 @@ func TestAggregateCostByDimension(t *testing.T) {
 }
 
 func TestAggregatePlanTokensByUser(t *testing.T) {
-	store := newTestStore(t)
+	eachBackend(t, scenarioAggregatePlanTokensByUser)
+}
+
+func scenarioAggregatePlanTokensByUser(t *testing.T, store *xologorm.Store) {
 	ctx := context.Background()
 	orgID := model.OrgID("org-1")
 

@@ -1,0 +1,94 @@
+package gorm
+
+import (
+	"strings"
+
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/ncruces/go-sqlite3"
+	"github.com/pkg/errors"
+	"gorm.io/gorm"
+)
+
+// Dialect names as reported by gorm.DB.Dialector.Name().
+const (
+	dialectSQLite   = "sqlite"
+	dialectPostgres = "postgres"
+)
+
+// isSQLite reports whether db talks to a SQLite backend. Used to guard the
+// PRAGMA statements and the table-rebuild workarounds that only SQLite needs.
+func isSQLite(db *gorm.DB) bool {
+	return db.Dialector.Name() == dialectSQLite
+}
+
+// isPostgres reports whether db talks to a PostgreSQL backend.
+func isPostgres(db *gorm.DB) bool {
+	return db.Dialector.Name() == dialectPostgres
+}
+
+// PostgreSQL SQLSTATE codes worth retrying: the transaction can succeed on a
+// second attempt without any change to the statements it runs.
+var retryablePGCodes = map[string]struct{}{
+	"40001": {}, // serialization_failure
+	"40P01": {}, // deadlock_detected
+	"55P03": {}, // lock_not_available
+	"55006": {}, // object_in_use
+}
+
+// isRetryableError reports whether err designates a transient contention
+// failure (a busy/locked SQLite database, a serialization conflict or deadlock
+// on PostgreSQL) that warrants replaying the whole transaction.
+func isRetryableError(err error) bool {
+	var sqliteErr *sqlite3.Error
+	if errors.As(err, &sqliteErr) {
+		switch sqliteErr.Code() {
+		case sqlite3.BUSY, sqlite3.LOCKED:
+			return true
+		default:
+			return false
+		}
+	}
+
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		_, ok := retryablePGCodes[pgErr.Code]
+		return ok
+	}
+
+	return false
+}
+
+// isUniqueViolation reports whether err is a unique constraint violation whose
+// message references every fragment given. Fragments let a caller distinguish
+// which index was hit; they are matched case-insensitively against the driver
+// message, which spells the index out differently per backend (SQLite reports
+// "users.email", PostgreSQL the index name "idx_users_email_nonempty").
+func isUniqueViolation(err error, fragments ...string) bool {
+	var msg string
+
+	var sqliteErr *sqlite3.Error
+	if errors.As(err, &sqliteErr) {
+		if sqliteErr.Code() != sqlite3.CONSTRAINT {
+			return false
+		}
+		msg = sqliteErr.Error()
+	} else {
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) {
+			return false
+		}
+		if pgErr.Code != "23505" { // unique_violation
+			return false
+		}
+		msg = pgErr.Message + " " + pgErr.Detail + " " + pgErr.ConstraintName
+	}
+
+	msg = strings.ToLower(msg)
+	for _, fragment := range fragments {
+		if !strings.Contains(msg, strings.ToLower(fragment)) {
+			return false
+		}
+	}
+
+	return true
+}

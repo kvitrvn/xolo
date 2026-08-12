@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/xolo-gateway/xolo/internal/core/port"
-	"github.com/ncruces/go-sqlite3"
 	"github.com/pkg/errors"
 	"github.com/rs/xid"
 	"gorm.io/gorm"
@@ -22,7 +21,7 @@ func (s *Store) GetSecret(ctx context.Context, orgID, pluginName, nodeID, key st
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return "", false, err
 	}
@@ -47,21 +46,21 @@ func (s *Store) SetSecret(ctx context.Context, orgID, pluginName, nodeID, key, v
 			Columns:   []clause.Column{{Name: "node_id"}, {Name: "key"}},
 			DoUpdates: clause.AssignmentColumns([]string{"value_encrypted", "org_id", "plugin_name", "updated_at"}),
 		}).Create(secret).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // DeleteSecret implements port.SecretStore.
 func (s *Store) DeleteSecret(ctx context.Context, orgID, pluginName, nodeID, key string) error {
 	return s.withRetry(ctx, true, func(ctx context.Context, db *gorm.DB) error {
 		return errors.WithStack(db.Where("node_id = ? AND key = ?", nodeID, key).Delete(&PluginNodeSecret{}).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // DeleteAllForNode implements port.SecretStore.
 func (s *Store) DeleteAllForNode(ctx context.Context, nodeID string) error {
 	return s.withRetry(ctx, true, func(ctx context.Context, db *gorm.DB) error {
 		return errors.WithStack(db.Where("node_id = ?", nodeID).Delete(&PluginNodeSecret{}).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 var _ port.SecretStore = &Store{}

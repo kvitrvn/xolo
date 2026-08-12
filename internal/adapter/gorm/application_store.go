@@ -6,7 +6,6 @@ import (
 
 	"github.com/xolo-gateway/xolo/internal/core/model"
 	"github.com/xolo-gateway/xolo/internal/core/port"
-	"github.com/ncruces/go-sqlite3"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 )
@@ -54,7 +53,7 @@ func (s *Store) CreateApplication(ctx context.Context, app model.Application) er
 		}
 
 		return nil
-	}, sqlite3.LOCKED, sqlite3.BUSY)
+	})
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -74,7 +73,7 @@ func (s *Store) GetApplication(ctx context.Context, appID model.ApplicationID) (
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.LOCKED, sqlite3.BUSY)
+	})
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -94,7 +93,7 @@ func (s *Store) QueryApplications(ctx context.Context, orgID model.OrgID) ([]mod
 		}
 
 		return nil
-	}, sqlite3.LOCKED, sqlite3.BUSY)
+	})
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -126,7 +125,7 @@ func (s *Store) UpdateApplication(ctx context.Context, app model.Application) er
 		}
 
 		return nil
-	}, sqlite3.LOCKED, sqlite3.BUSY)
+	})
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -153,7 +152,7 @@ func (s *Store) DeleteApplication(ctx context.Context, appID model.ApplicationID
 		}
 
 		return nil
-	}, sqlite3.LOCKED, sqlite3.BUSY)
+	})
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -173,7 +172,7 @@ func (s *Store) FindApplicationAuthToken(ctx context.Context, token string) (mod
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.LOCKED, sqlite3.BUSY)
+	})
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -198,7 +197,7 @@ func (s *Store) GetApplicationAuthToken(ctx context.Context, tokenID model.AuthT
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.LOCKED, sqlite3.BUSY)
+	})
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -215,7 +214,7 @@ func (s *Store) GetApplicationAuthTokens(ctx context.Context, appID model.Applic
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.LOCKED, sqlite3.BUSY)
+	})
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -238,7 +237,7 @@ func (s *Store) CreateApplicationAuthToken(ctx context.Context, token model.Auth
 		}
 
 		return nil
-	}, sqlite3.LOCKED, sqlite3.BUSY)
+	})
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -259,7 +258,7 @@ func (s *Store) DeleteApplicationAuthToken(ctx context.Context, tokenID model.Au
 		}
 
 		return nil
-	}, sqlite3.LOCKED, sqlite3.BUSY)
+	})
 	if err != nil {
 		return errors.WithStack(err)
 	}

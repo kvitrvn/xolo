@@ -4,12 +4,16 @@ import (
 	"context"
 	"testing"
 
+	xologorm "github.com/xolo-gateway/xolo/internal/adapter/gorm"
 	"github.com/xolo-gateway/xolo/internal/core/model"
 	"github.com/xolo-gateway/xolo/internal/core/rbac"
 )
 
 func TestRoleStore_BuiltinRolesAndResolution(t *testing.T) {
-	store := newTestStore(t)
+	eachBackend(t, scenarioRoleStore_BuiltinRolesAndResolution)
+}
+
+func scenarioRoleStore_BuiltinRolesAndResolution(t *testing.T, store *xologorm.Store) {
 	ctx := context.Background()
 
 	org := model.NewOrganization("acme", "Acme", "")
@@ -88,7 +92,10 @@ func TestRoleStore_BuiltinRolesAndResolution(t *testing.T) {
 }
 
 func TestRoleStore_CustomRoleAndModelGrant(t *testing.T) {
-	store := newTestStore(t)
+	eachBackend(t, scenarioRoleStore_CustomRoleAndModelGrant)
+}
+
+func scenarioRoleStore_CustomRoleAndModelGrant(t *testing.T, store *xologorm.Store) {
 	ctx := context.Background()
 
 	org := model.NewOrganization("acme", "Acme", "")
@@ -136,7 +143,10 @@ func TestRoleStore_CustomRoleAndModelGrant(t *testing.T) {
 // Applications hold roles directly instead of going through a membership, so
 // permission resolution has to reach them through the application join table.
 func TestRoleStore_ApplicationRoleResolution(t *testing.T) {
-	store := newTestStore(t)
+	eachBackend(t, scenarioRoleStore_ApplicationRoleResolution)
+}
+
+func scenarioRoleStore_ApplicationRoleResolution(t *testing.T, store *xologorm.Store) {
 	ctx := context.Background()
 
 	org := model.NewOrganization("acme", "Acme", "")
@@ -239,7 +249,10 @@ func TestRoleStore_ApplicationRoleResolution(t *testing.T) {
 // Deleting a role must drop its application assignments, not just its
 // membership ones.
 func TestRoleStore_DeleteRoleClearsApplicationAssignment(t *testing.T) {
-	store := newTestStore(t)
+	eachBackend(t, scenarioRoleStore_DeleteRoleClearsApplicationAssignment)
+}
+
+func scenarioRoleStore_DeleteRoleClearsApplicationAssignment(t *testing.T, store *xologorm.Store) {
 	ctx := context.Background()
 
 	org := model.NewOrganization("acme", "Acme", "")
@@ -275,7 +288,10 @@ func TestRoleStore_DeleteRoleClearsApplicationAssignment(t *testing.T) {
 }
 
 func TestRoleStore_BuiltinRoleNotDeletable(t *testing.T) {
-	store := newTestStore(t)
+	eachBackend(t, scenarioRoleStore_BuiltinRoleNotDeletable)
+}
+
+func scenarioRoleStore_BuiltinRoleNotDeletable(t *testing.T, store *xologorm.Store) {
 	ctx := context.Background()
 
 	org := model.NewOrganization("acme", "Acme", "")

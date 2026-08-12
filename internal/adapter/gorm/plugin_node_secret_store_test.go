@@ -5,22 +5,13 @@ import (
 	"testing"
 
 	xologorm "github.com/xolo-gateway/xolo/internal/adapter/gorm"
-	_ "github.com/ncruces/go-sqlite3/embed"
-	"github.com/ncruces/go-sqlite3/gormlite"
-	gormpkg "gorm.io/gorm"
 )
 
-func newTestStore(t *testing.T) *xologorm.Store {
-	t.Helper()
-	db, err := gormpkg.Open(gormlite.Open(":memory:"), &gormpkg.Config{})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	return xologorm.NewStore(db)
+func TestPluginNodeSecretStore_SetGetDelete(t *testing.T) {
+	eachBackend(t, scenarioPluginNodeSecretStore_SetGetDelete)
 }
 
-func TestPluginNodeSecretStore_SetGetDelete(t *testing.T) {
-	store := newTestStore(t)
+func scenarioPluginNodeSecretStore_SetGetDelete(t *testing.T, store *xologorm.Store) {
 	ctx := context.Background()
 
 	_, found, err := store.GetSecret(ctx, "org-1", "mcp-bridge", "node-1", "authValue")
@@ -80,7 +71,10 @@ func TestPluginNodeSecretStore_SetGetDelete(t *testing.T) {
 }
 
 func TestPluginNodeSecretStore_DeleteAllForNode(t *testing.T) {
-	store := newTestStore(t)
+	eachBackend(t, scenarioPluginNodeSecretStore_DeleteAllForNode)
+}
+
+func scenarioPluginNodeSecretStore_DeleteAllForNode(t *testing.T, store *xologorm.Store) {
 	ctx := context.Background()
 
 	if err := store.SetSecret(ctx, "org-1", "mcp-bridge", "node-1", "authValue", "secret-a"); err != nil {

@@ -5,7 +5,6 @@ import (
 
 	"github.com/xolo-gateway/xolo/internal/core/model"
 	"github.com/xolo-gateway/xolo/internal/core/port"
-	"github.com/ncruces/go-sqlite3"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -15,7 +14,7 @@ import (
 func (s *Store) CreateOrg(ctx context.Context, org model.Organization) error {
 	return s.withRetry(ctx, true, func(ctx context.Context, db *gorm.DB) error {
 		return errors.WithStack(db.Create(fromOrganization(org)).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // GetOrgByID implements port.OrgStore.
@@ -29,7 +28,7 @@ func (s *Store) GetOrgByID(ctx context.Context, id model.OrgID) (model.Organizat
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -47,7 +46,7 @@ func (s *Store) GetOrgBySlug(ctx context.Context, slug string) (model.Organizati
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +73,7 @@ func (s *Store) ListOrgs(ctx context.Context, opts port.ListOrgsOptions) ([]mode
 		}
 
 		return errors.WithStack(query.Order("name ASC").Find(&orgs).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, 0, err
 	}
@@ -93,7 +92,7 @@ func (s *Store) SaveOrg(ctx context.Context, org model.Organization) error {
 			Columns:   []clause.Column{{Name: "id"}},
 			UpdateAll: true,
 		}).Create(fromOrganization(org)).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // DeleteOrg implements port.OrgStore.
@@ -107,14 +106,14 @@ func (s *Store) DeleteOrg(ctx context.Context, id model.OrgID) error {
 			return errors.WithStack(port.ErrNotFound)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // AddMember implements port.OrgStore.
 func (s *Store) AddMember(ctx context.Context, membership model.Membership) error {
 	return s.withRetry(ctx, true, func(ctx context.Context, db *gorm.DB) error {
 		return errors.WithStack(db.Create(fromMembership(membership)).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // RemoveMember implements port.OrgStore.
@@ -128,7 +127,7 @@ func (s *Store) RemoveMember(ctx context.Context, id model.MembershipID) error {
 			return errors.WithStack(port.ErrNotFound)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // GetMembership implements port.OrgStore.
@@ -142,7 +141,7 @@ func (s *Store) GetMembership(ctx context.Context, id model.MembershipID) (model
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +161,7 @@ func (s *Store) GetUserOrgMembership(ctx context.Context, userID model.UserID, o
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +190,7 @@ func (s *Store) ListOrgMembers(ctx context.Context, orgID model.OrgID, opts port
 		}
 
 		return errors.WithStack(query.Find(&members).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, 0, err
 	}
@@ -210,7 +209,7 @@ func (s *Store) GetUserMemberships(ctx context.Context, userID model.UserID) ([]
 		return errors.WithStack(db.Preload("Org").Preload("Roles").Preload("Roles.Permissions").
 			Where("user_id = ?", string(userID)).
 			Find(&members).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +227,7 @@ func (s *Store) IsMember(ctx context.Context, userID model.UserID, orgID model.O
 		return errors.WithStack(db.Model(&Membership{}).
 			Where("user_id = ? AND org_id = ?", string(userID), string(orgID)).
 			Count(&count).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return false, err
 	}
