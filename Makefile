@@ -50,6 +50,17 @@ build-%: generate
 purge:
 	rm -rf *.sqlite* index.bleve
 
+.PHONY: test
+test:
+	go test ./...
+
+# Runs the store suite against both backends. PostgreSQL is provided by a
+# throwaway testcontainers instance, so a running Docker daemon is required.
+# Set XOLO_TEST_POSTGRES_DSN to target an existing server instead.
+.PHONY: test-integration
+test-integration:
+	go test -tags integration -timeout 15m ./internal/adapter/gorm/...
+
 # Generates a SQLite database populated with coherent fake data for E2E tests.
 # See cmd/seed/README.md for the catalog of the generated fixture.
 SEED_DSN ?= e2e.sqlite

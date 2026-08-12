@@ -2,13 +2,10 @@ package gorm
 
 import (
 	"context"
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/xolo-gateway/xolo/internal/core/model"
 	"github.com/xolo-gateway/xolo/internal/core/port"
-	"github.com/ncruces/go-sqlite3"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 )
@@ -17,7 +14,7 @@ import (
 func (s *Store) RecordUsage(ctx context.Context, record model.UsageRecord) error {
 	return s.withRetry(ctx, true, func(ctx context.Context, db *gorm.DB) error {
 		return errors.WithStack(db.Create(fromUsageRecord(record)).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // QueryUsage implements port.UsageStore.
@@ -35,7 +32,7 @@ func (s *Store) QueryUsage(ctx context.Context, filter port.UsageFilter) ([]mode
 			query = query.Offset(*filter.Offset)
 		}
 		return errors.WithStack(query.Find(&records).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +60,7 @@ func (s *Store) AggregateUsage(ctx context.Context, filter port.UsageFilter) (*p
 			Select("COUNT(*) as total_requests, COALESCE(SUM(cost),0) as total_cost, COALESCE(SUM(prompt_tokens),0) as prompt_tokens, COALESCE(SUM(cached_tokens),0) as cached_tokens, COALESCE(SUM(completion_tokens),0) as completion_tokens, COALESCE(SUM(total_tokens),0) as total_tokens")
 		query = applyUsageFilter(query, filter)
 		return errors.WithStack(query.Scan(&counts).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +74,7 @@ func (s *Store) AggregateUsage(ctx context.Context, filter port.UsageFilter) (*p
 		query.Limit(1).Scan(&row)
 		currency = row.Currency
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 
 	return &port.UsageAggregate{
 		TotalRequests:    counts.TotalRequests,
@@ -104,79 +101,53 @@ func (s *Store) SumCostSince(ctx context.Context, userID model.UserID, orgID mod
 			Scan(&result).Error
 		total = result.Total
 		return errors.WithStack(err)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return 0, err
 	}
 	return total, nil
 }
 
-func applyUsageFilter(query *gorm.DB, filter port.UsageFilter) *gorm.DB {
-	hasUserFilter := filter.UserID != nil || len(filter.UserIDs) > 0
-	hasAppFilter := filter.ApplicationID != nil || len(filter.ApplicationIDs) > 0
+// principalIDs merges the single-value and slice forms of a filter field into
+// one list of string ids, dropping duplicates.
+func principalIDs[T ~string](single *T, many []T) []string {
+	ids := make([]string, 0, len(many)+1)
+	seen := make(map[string]struct{}, len(many)+1)
 
-	if hasUserFilter && hasAppFilter {
-		var userConditions []string
-		var appConditions []string
-		if filter.UserID != nil {
-			userConditions = append(userConditions, "user_id = "+string(*filter.UserID))
+	add := func(id string) {
+		if id == "" {
+			return
 		}
-		if len(filter.UserIDs) > 0 {
-			userIDStrings := make([]string, len(filter.UserIDs))
-			for i, uid := range filter.UserIDs {
-				userIDStrings[i] = fmt.Sprintf("'%s'", uid)
-			}
-			userConditions = append(userConditions, "user_id IN ("+strings.Join(userIDStrings, ",")+")")
+		if _, ok := seen[id]; ok {
+			return
 		}
-		if filter.ApplicationID != nil {
-			appConditions = append(appConditions, "application_id = "+string(*filter.ApplicationID))
-		}
-		if len(filter.ApplicationIDs) > 0 {
-			appIDStrings := make([]string, len(filter.ApplicationIDs))
-			for i, aid := range filter.ApplicationIDs {
-				appIDStrings[i] = fmt.Sprintf("'%s'", aid)
-			}
-			appConditions = append(appConditions, "application_id IN ("+strings.Join(appIDStrings, ",")+")")
-		}
-		userClause := ""
-		if len(userConditions) > 0 {
-			userClause = "(" + strings.Join(userConditions, " OR ") + ")"
-		}
-		appClause := ""
-		if len(appConditions) > 0 {
-			appClause = "(" + strings.Join(appConditions, " OR ") + ")"
-		}
-		orClause := userClause
-		if appClause != "" {
-			if orClause != "" {
-				orClause += " OR " + appClause
-			} else {
-				orClause = appClause
-			}
-		}
-		query = query.Where(orClause)
-	} else if hasUserFilter {
-		if filter.UserID != nil {
-			query = query.Where("user_id = ?", string(*filter.UserID))
-		}
-		if len(filter.UserIDs) > 0 {
-			userIDStrings := make([]string, len(filter.UserIDs))
-			for i, uid := range filter.UserIDs {
-				userIDStrings[i] = string(uid)
-			}
-			query = query.Where("user_id IN ?", userIDStrings)
-		}
-	} else if hasAppFilter {
-		if filter.ApplicationID != nil {
-			query = query.Where("application_id = ?", string(*filter.ApplicationID))
-		}
-		if len(filter.ApplicationIDs) > 0 {
-			appIDStrings := make([]string, len(filter.ApplicationIDs))
-			for i, aid := range filter.ApplicationIDs {
-				appIDStrings[i] = string(aid)
-			}
-			query = query.Where("application_id IN ?", appIDStrings)
-		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+
+	if single != nil {
+		add(string(*single))
+	}
+	for _, id := range many {
+		add(string(id))
+	}
+
+	return ids
+}
+
+func applyUsageFilter(query *gorm.DB, filter port.UsageFilter) *gorm.DB {
+	userIDs := principalIDs(filter.UserID, filter.UserIDs)
+	appIDs := principalIDs(filter.ApplicationID, filter.ApplicationIDs)
+
+	// A usage record is attributed to either a user or an application, never
+	// both, so filtering on both kinds at once means "any of these principals".
+	switch {
+	case len(userIDs) > 0 && len(appIDs) > 0:
+		query = query.Where("user_id IN ? OR application_id IN ?", userIDs, appIDs)
+	case len(userIDs) > 0:
+		query = query.Where("user_id IN ?", userIDs)
+	case len(appIDs) > 0:
+		query = query.Where("application_id IN ?", appIDs)
 	}
 	if filter.OrgID != nil {
 		query = query.Where("org_id = ?", string(*filter.OrgID))
@@ -233,7 +204,7 @@ func (s *Store) SumCostSinceByCurrency(ctx context.Context, userIDs []model.User
 			query = query.Where("user_id IN ?", ids)
 		}
 		return errors.WithStack(query.Group("currency").Scan(&rows).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +229,7 @@ func (s *Store) SumPlanUsageSince(ctx context.Context, orgID model.OrgID, provid
 			Where("org_id = ? AND provider_id = ? AND created_at >= ? AND plan_covered = 1",
 				string(orgID), string(providerID), since).
 			Scan(&row).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return 0, 0, err
 	}
@@ -278,20 +249,25 @@ func (s *Store) SumUserPlanUsageSince(ctx context.Context, userID model.UserID, 
 			Where("user_id = ? AND org_id = ? AND provider_id = ? AND created_at >= ? AND plan_covered = 1",
 				string(userID), string(orgID), string(providerID), since).
 			Scan(&row).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return 0, 0, err
 	}
 	return row.Tokens, row.ProviderValue, nil
 }
 
-// dimensionGroupExpr returns the SQL expression to GROUP BY for a usage dimension.
-func dimensionGroupExpr(d port.UsageDimension) (string, error) {
+// dimensionGroupExpr returns the SQL expression to GROUP BY for a usage
+// dimension, spelled for the backend db talks to.
+func dimensionGroupExpr(db *gorm.DB, d port.UsageDimension) (string, error) {
 	switch d {
 	case port.UsageDimensionDay:
-		// 'localtime' buckets on the server's local calendar day, matching the
-		// time.Time formatting used elsewhere. Only affects which day a record
-		// near midnight lands in; never the summed totals.
+		// Bucket on the server's local calendar day, matching the time.Time
+		// formatting used elsewhere, and render it as a YYYY-MM-DD string so
+		// both backends yield the same key type. Only affects which day a
+		// record near midnight lands in; never the summed totals.
+		if isPostgres(db) {
+			return "to_char(created_at AT TIME ZONE current_setting('TIMEZONE'), 'YYYY-MM-DD')", nil
+		}
 		return "date(created_at, 'localtime')", nil
 	case port.UsageDimensionModel:
 		return "COALESCE(NULLIF(resolved_model_name, ''), proxy_model_name)", nil
@@ -306,11 +282,6 @@ func dimensionGroupExpr(d port.UsageDimension) (string, error) {
 
 // AggregateCostByDimension implements port.UsageStore.
 func (s *Store) AggregateCostByDimension(ctx context.Context, filter port.UsageFilter, dimension port.UsageDimension) ([]port.DimensionCost, error) {
-	groupExpr, err := dimensionGroupExpr(dimension)
-	if err != nil {
-		return nil, err
-	}
-
 	var rows []struct {
 		GroupKey string
 		OrgID    string
@@ -318,14 +289,19 @@ func (s *Store) AggregateCostByDimension(ctx context.Context, filter port.UsageF
 		Cost     int64
 	}
 
-	err = s.withRetry(ctx, false, func(ctx context.Context, db *gorm.DB) error {
+	err := s.withRetry(ctx, false, func(ctx context.Context, db *gorm.DB) error {
+		groupExpr, err := dimensionGroupExpr(db, dimension)
+		if err != nil {
+			return err
+		}
+
 		query := db.Model(&UsageRecord{}).
 			Select(groupExpr + " as group_key, org_id as org_id, currency as currency, COALESCE(SUM(cost), 0) as cost").
 			Where("plan_covered = 0")
 		query = applyUsageFilter(query, filter)
 		query = query.Group(groupExpr).Group("org_id").Group("currency")
 		return errors.WithStack(query.Scan(&rows).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -356,7 +332,7 @@ func (s *Store) AggregatePlanTokensByUser(ctx context.Context, filter port.Usage
 		query = applyUsageFilter(query, filter)
 		query = query.Group("user_id")
 		return errors.WithStack(query.Scan(&rows).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -383,7 +359,7 @@ func (s *Store) EarliestPlanUsageSince(ctx context.Context, orgID model.OrgID, p
 			Where("org_id = ? AND provider_id = ? AND created_at >= ? AND plan_covered = 1",
 				string(orgID), string(providerID), since).
 			Scan(&row).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return time.Time{}, err
 	}

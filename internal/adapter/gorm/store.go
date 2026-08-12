@@ -3,11 +3,9 @@ package gorm
 import (
 	"context"
 	"log/slog"
-	"slices"
 	"time"
 
 	"github.com/xolo-gateway/xolo/internal/core/port"
-	"github.com/ncruces/go-sqlite3"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 )
@@ -16,7 +14,9 @@ type Store struct {
 	getDatabase func(ctx context.Context) (*gorm.DB, error)
 }
 
-func (s *Store) withRetry(ctx context.Context, withTx bool, fn func(ctx context.Context, db *gorm.DB) error, codes ...sqlite3.ErrorCode) error {
+// withRetry runs fn, replaying it with an exponential backoff while the
+// backend reports a transient contention failure (see isRetryableError).
+func (s *Store) withRetry(ctx context.Context, withTx bool, fn func(ctx context.Context, db *gorm.DB) error) error {
 	db, err := s.getDatabase(ctx)
 	if err != nil {
 		return errors.WithStack(err)
@@ -45,12 +45,7 @@ func (s *Store) withRetry(ctx context.Context, withTx bool, fn func(ctx context.
 				return errors.WithStack(err)
 			}
 
-			var sqliteErr *sqlite3.Error
-			if errors.As(err, &sqliteErr) {
-				if !slices.Contains(codes, sqliteErr.Code()) {
-					return errors.WithStack(err)
-				}
-
+			if isRetryableError(err) {
 				slog.DebugContext(ctx, "transaction failed, will retry", slog.Int("retries", retries), slog.Duration("backoff", backoff), slog.Any("error", errors.WithStack(err)))
 
 				retries++

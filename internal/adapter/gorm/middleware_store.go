@@ -5,7 +5,6 @@ import (
 
 	"github.com/xolo-gateway/xolo/internal/core/model"
 	"github.com/xolo-gateway/xolo/internal/core/port"
-	"github.com/ncruces/go-sqlite3"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -20,7 +19,7 @@ func (s *Store) CreateMiddleware(ctx context.Context, mw model.Middleware) error
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 func (s *Store) GetMiddlewareByID(ctx context.Context, id model.MiddlewareID) (model.Middleware, error) {
@@ -33,7 +32,7 @@ func (s *Store) GetMiddlewareByID(ctx context.Context, id model.MiddlewareID) (m
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +55,7 @@ func (s *Store) queryMiddlewares(ctx context.Context, scope func(*gorm.DB) *gorm
 	var mws []*Middleware
 	err := s.withRetry(ctx, false, func(ctx context.Context, db *gorm.DB) error {
 		return errors.WithStack(scope(db).Find(&mws).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +72,7 @@ func (s *Store) SaveMiddleware(ctx context.Context, mw model.Middleware) error {
 			Columns:   []clause.Column{{Name: "id"}},
 			UpdateAll: true,
 		}).Create(fromMiddleware(mw)).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 func (s *Store) DeleteMiddleware(ctx context.Context, id model.MiddlewareID) error {
@@ -86,7 +85,7 @@ func (s *Store) DeleteMiddleware(ctx context.Context, id model.MiddlewareID) err
 			return errors.WithStack(port.ErrNotFound)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 var _ port.MiddlewareStore = &Store{}

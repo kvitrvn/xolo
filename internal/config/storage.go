@@ -7,11 +7,23 @@ type Storage struct {
 }
 
 type Database struct {
-	DSN   string `env:"DSN,expand" envDefault:"data.sqlite"`
+	// DSN selects the backend as well as the database: a "postgres://" URL (or
+	// a libpq "host=... dbname=..." string) targets PostgreSQL, anything else
+	// is a SQLite file path.
+	DSN string `env:"DSN,expand" envDefault:"data.sqlite"`
+	// Pool tunes the connection pool. Ignored on SQLite, which is pinned to a
+	// single connection.
+	Pool  DatabasePool `envPrefix:"POOL_"`
 	Cache struct {
 		Users     StoreCache `envPrefix:"USERS_"`
 		Providers StoreCache `envPrefix:"PROVIDERS_"`
 	} `envPrefix:"CACHE_"`
+}
+
+type DatabasePool struct {
+	MaxOpenConns    int           `env:"MAX_OPEN_CONNS,expand" envDefault:"25"`
+	MaxIdleConns    int           `env:"MAX_IDLE_CONNS,expand" envDefault:"5"`
+	ConnMaxLifetime time.Duration `env:"CONN_MAX_LIFETIME,expand" envDefault:"60m"`
 }
 
 type StoreCache struct {

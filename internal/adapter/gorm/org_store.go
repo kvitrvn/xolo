@@ -5,7 +5,6 @@ import (
 
 	"github.com/xolo-gateway/xolo/internal/core/model"
 	"github.com/xolo-gateway/xolo/internal/core/port"
-	"github.com/ncruces/go-sqlite3"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -15,13 +14,13 @@ import (
 func (s *Store) CreateOrg(ctx context.Context, org model.Organization) error {
 	return s.withRetry(ctx, true, func(ctx context.Context, db *gorm.DB) error {
 		if err := db.Create(fromOrganization(org)).Error; err != nil {
-			if isUniqueConstraintViolation(err, "organizations.slug") {
+			if isUniqueViolation(err, "organizations", "slug") {
 				return errors.Wrapf(port.ErrAlreadyExists, "slug %q is already used by another organization", org.Slug())
 			}
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // GetOrgByID implements port.OrgStore.
@@ -35,7 +34,7 @@ func (s *Store) GetOrgByID(ctx context.Context, id model.OrgID) (model.Organizat
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +52,7 @@ func (s *Store) GetOrgBySlug(ctx context.Context, slug string) (model.Organizati
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +79,7 @@ func (s *Store) ListOrgs(ctx context.Context, opts port.ListOrgsOptions) ([]mode
 		}
 
 		return errors.WithStack(query.Order("name ASC").Find(&orgs).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, 0, err
 	}
@@ -99,12 +98,14 @@ func (s *Store) SaveOrg(ctx context.Context, org model.Organization) error {
 			Columns:   []clause.Column{{Name: "id"}},
 			UpdateAll: true,
 		}).Create(fromOrganization(org)).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
-// DeleteOrg implements port.OrgStore. It removes the rows that reference the
-// organization — memberships, roles, invites and their role assignments —
-// before deleting it, as those foreign keys have no database-level cascade.
+// DeleteOrg implements port.OrgStore. It removes every row scoped to the
+// organization before deleting it: the tables that declare a foreign key on
+// `organizations` have no database-level cascade, and the remaining org-scoped
+// tables would otherwise be orphaned — in particular the applications and their
+// auth tokens, which stay resolvable by FindAuthToken as long as they exist.
 func (s *Store) DeleteOrg(ctx context.Context, id model.OrgID) error {
 	return s.withRetry(ctx, true, func(ctx context.Context, db *gorm.DB) error {
 		var exists Organization
@@ -115,38 +116,78 @@ func (s *Store) DeleteOrg(ctx context.Context, id model.OrgID) error {
 			return errors.WithStack(err)
 		}
 
+		// Subqueries are evaluated when the DELETE they belong to runs, so every
+		// statement using them must be issued before its parent rows are gone.
 		membershipIDs := db.Model(&Membership{}).Select("id").Where("org_id = ?", string(id))
+		roleIDs := db.Model(&Role{}).Select("id").Where("org_id = ?", string(id))
+		applicationIDs := db.Model(&Application{}).Select("id").Where("org_id = ?", string(id))
+		alertIDs := db.Model(&Alert{}).Select("id").Where("org_id = ?", string(id))
+
 		if err := db.Where("membership_id IN (?)", membershipIDs).Delete(&MembershipRole{}).Error; err != nil {
 			return errors.WithStack(err)
 		}
 
-		roleIDs := db.Model(&Role{}).Select("id").Where("org_id = ?", string(id))
 		if err := db.Where("role_id IN (?)", roleIDs).Delete(&MembershipRole{}).Error; err != nil {
 			return errors.WithStack(err)
 		}
 		if err := db.Where("role_id IN (?)", roleIDs).Delete(&ApplicationRole{}).Error; err != nil {
 			return errors.WithStack(err)
 		}
+		if err := db.Where("role_id IN (?)", roleIDs).Delete(&RolePermission{}).Error; err != nil {
+			return errors.WithStack(err)
+		}
+		if err := db.Where("role_id IN (?)", roleIDs).Delete(&RoleModel{}).Error; err != nil {
+			return errors.WithStack(err)
+		}
 
-		if err := db.Where("org_id = ?", string(id)).Delete(&Membership{}).Error; err != nil {
+		if err := db.Where("application_id IN (?)", applicationIDs).Delete(&ApplicationRole{}).Error; err != nil {
 			return errors.WithStack(err)
 		}
-		if err := db.Where("org_id = ?", string(id)).Delete(&InviteToken{}).Error; err != nil {
+		if err := db.Where("org_id = ? OR application_id IN (?)", string(id), applicationIDs).Delete(&AuthToken{}).Error; err != nil {
 			return errors.WithStack(err)
 		}
-		if err := db.Where("org_id = ?", string(id)).Delete(&Role{}).Error; err != nil {
+		if err := db.Where("scope = ? AND scope_id IN (?)", string(model.QuotaScopeApplication), applicationIDs).Delete(&Quota{}).Error; err != nil {
 			return errors.WithStack(err)
+		}
+		if err := db.Where("alert_id IN (?)", alertIDs).Delete(&AlertIncident{}).Error; err != nil {
+			return errors.WithStack(err)
+		}
+
+		if err := db.Where("scope = ? AND scope_id = ?", string(model.QuotaScopeOrg), string(id)).Delete(&Quota{}).Error; err != nil {
+			return errors.WithStack(err)
+		}
+
+		orgScoped := []any{
+			&Application{},
+			&Membership{},
+			&InviteToken{},
+			&Role{},
+			&Alert{},
+			&AlertIncident{},
+			&UsageRecord{},
+			&Event{},
+			&EventSettings{},
+			&VirtualModel{},
+			&Middleware{},
+			&PluginNodeSecret{},
+			&Provider{},
+			&LLMModel{},
+		}
+		for _, m := range orgScoped {
+			if err := db.Where("org_id = ?", string(id)).Delete(m).Error; err != nil {
+				return errors.WithStack(err)
+			}
 		}
 
 		return errors.WithStack(db.Delete(&Organization{}, "id = ?", string(id)).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // AddMember implements port.OrgStore.
 func (s *Store) AddMember(ctx context.Context, membership model.Membership) error {
 	return s.withRetry(ctx, true, func(ctx context.Context, db *gorm.DB) error {
 		return errors.WithStack(db.Create(fromMembership(membership)).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // RemoveMember implements port.OrgStore. The membership_roles rows are deleted
@@ -166,7 +207,7 @@ func (s *Store) RemoveMember(ctx context.Context, id model.MembershipID) error {
 			return errors.WithStack(port.ErrNotFound)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // GetMembership implements port.OrgStore.
@@ -180,7 +221,7 @@ func (s *Store) GetMembership(ctx context.Context, id model.MembershipID) (model
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +241,7 @@ func (s *Store) GetUserOrgMembership(ctx context.Context, userID model.UserID, o
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +270,7 @@ func (s *Store) ListOrgMembers(ctx context.Context, orgID model.OrgID, opts port
 		}
 
 		return errors.WithStack(query.Find(&members).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, 0, err
 	}
@@ -248,7 +289,7 @@ func (s *Store) GetUserMemberships(ctx context.Context, userID model.UserID) ([]
 		return errors.WithStack(db.Preload("Org").Preload("Roles").Preload("Roles.Permissions").
 			Where("user_id = ?", string(userID)).
 			Find(&members).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +307,7 @@ func (s *Store) IsMember(ctx context.Context, userID model.UserID, orgID model.O
 		return errors.WithStack(db.Model(&Membership{}).
 			Where("user_id = ? AND org_id = ?", string(userID), string(orgID)).
 			Count(&count).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return false, err
 	}

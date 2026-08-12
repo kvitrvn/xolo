@@ -12,7 +12,8 @@ type Middleware struct {
 	OrgID       string `gorm:"uniqueIndex:idx_mw_org_name;index;not null"`
 	Name        string `gorm:"uniqueIndex:idx_mw_org_name;not null"`
 	Description string
-	Enabled     bool `gorm:"default:true"`
+	// See the note on Organization.Active: no `default` here on purpose.
+	Enabled     bool
 	Priority    int  `gorm:"default:0"`
 	// AppliesToAll wraps every model of the org when true, ignoring TargetsJSON.
 	AppliesToAll bool

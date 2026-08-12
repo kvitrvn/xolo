@@ -15,7 +15,8 @@ type Provider struct {
 	Type      string `gorm:"not null"`
 	BaseURL   string
 	APIKey    string `gorm:"not null"` // AES-GCM encrypted hex
-	Active    int    `gorm:"default:1"`
+	// See the note on Organization.Active: no `default` here on purpose.
+	Active    int
 	Currency  string `gorm:"default:'USD'"`
 	CloudTier int    `gorm:"default:0"`
 	RetryConfig      JSONColumn[model.RetryConfig]      `gorm:"type:text"`

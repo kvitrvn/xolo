@@ -5,7 +5,6 @@ import (
 
 	"github.com/xolo-gateway/xolo/internal/core/model"
 	"github.com/xolo-gateway/xolo/internal/core/port"
-	"github.com/ncruces/go-sqlite3"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -20,7 +19,7 @@ func (s *Store) CreateVirtualModel(ctx context.Context, vm model.VirtualModel) e
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 func (s *Store) GetVirtualModelByID(ctx context.Context, id model.VirtualModelID) (model.VirtualModel, error) {
@@ -33,7 +32,7 @@ func (s *Store) GetVirtualModelByID(ctx context.Context, id model.VirtualModelID
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +49,7 @@ func (s *Store) GetVirtualModelByName(ctx context.Context, orgID model.OrgID, na
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +60,7 @@ func (s *Store) ListVirtualModels(ctx context.Context, orgID model.OrgID) ([]mod
 	var vms []*VirtualModel
 	err := s.withRetry(ctx, false, func(ctx context.Context, db *gorm.DB) error {
 		return errors.WithStack(db.Where("org_id = ?", string(orgID)).Order("name ASC").Find(&vms).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +77,7 @@ func (s *Store) SaveVirtualModel(ctx context.Context, vm model.VirtualModel) err
 			Columns:   []clause.Column{{Name: "id"}},
 			UpdateAll: true,
 		}).Create(fromVirtualModel(vm)).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 func (s *Store) DeleteVirtualModel(ctx context.Context, id model.VirtualModelID) error {
@@ -91,7 +90,7 @@ func (s *Store) DeleteVirtualModel(ctx context.Context, id model.VirtualModelID)
 			return errors.WithStack(port.ErrNotFound)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 var _ port.VirtualModelStore = &Store{}

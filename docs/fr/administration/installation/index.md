@@ -26,7 +26,7 @@ docker run -d \
 
 Deux points spécifiques à l'image :
 
-- `XOLO_STORAGE_DATABASE_DSN` vaut `/data/data.sqlite` par défaut : montez un volume sur `/data` pour persister la base entre redémarrages.
+- `XOLO_STORAGE_DATABASE_DSN` vaut `/data/data.sqlite` par défaut : montez un volume sur `/data` pour persister la base entre redémarrages. Pour utiliser PostgreSQL à la place, positionnez cette variable sur un DSN `postgres://…` (voir [Configuration](./configuration.md)) ; le volume `/data` devient alors inutile.
 - `XOLO_PLUGINS_DIR` vaut `/plugins` par défaut. L'image embarque déjà les plugins officiels (`time-restriction`, `dummy-model`, `fuzzy-evaluator`, `request-evaluator`, `script-processor`, `pseudonymizer`, `mcp-bridge`, `system-prompt`) à cet emplacement.
 - Le port exposé est `3002`.
 

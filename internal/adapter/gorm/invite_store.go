@@ -6,7 +6,6 @@ import (
 
 	"github.com/xolo-gateway/xolo/internal/core/model"
 	"github.com/xolo-gateway/xolo/internal/core/port"
-	"github.com/ncruces/go-sqlite3"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 )
@@ -15,7 +14,7 @@ import (
 func (s *Store) CreateInvite(ctx context.Context, invite model.InviteToken) error {
 	return s.withRetry(ctx, true, func(ctx context.Context, db *gorm.DB) error {
 		return errors.WithStack(db.Create(fromInviteToken(invite)).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // GetInviteByID implements port.InviteStore.
@@ -29,7 +28,7 @@ func (s *Store) GetInviteByID(ctx context.Context, id model.InviteTokenID) (mode
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +43,7 @@ func (s *Store) ListInvites(ctx context.Context, orgID model.OrgID) ([]model.Inv
 			Where("org_id = ?", string(orgID)).
 			Order("created_at DESC").
 			Find(&tokens).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +66,7 @@ func (s *Store) RevokeInvite(ctx context.Context, id model.InviteTokenID) error 
 			return errors.WithStack(port.ErrNotFound)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // DeleteInvite implements port.InviteStore.
@@ -81,7 +80,7 @@ func (s *Store) DeleteInvite(ctx context.Context, id model.InviteTokenID) error 
 			return errors.WithStack(port.ErrNotFound)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // IncrementInviteUses implements port.InviteStore.
@@ -90,7 +89,7 @@ func (s *Store) IncrementInviteUses(ctx context.Context, id model.InviteTokenID)
 		return errors.WithStack(db.Model(&InviteToken{}).
 			Where("id = ?", string(id)).
 			UpdateColumn("uses_count", gorm.Expr("uses_count + 1")).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // ListPendingInvitesForEmail implements port.InviteStore.
@@ -102,7 +101,7 @@ func (s *Store) ListPendingInvitesForEmail(ctx context.Context, email string) ([
 			Where("invitee_email = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)", email, now).
 			Order("created_at DESC").
 			Find(&tokens).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}

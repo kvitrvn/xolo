@@ -50,8 +50,21 @@ Pour valider des jetons d'accès opaques côté API (introspection RFC 7662, ou 
 
 | Variable | Défaut | Description |
 | --- | --- | --- |
-| `XOLO_STORAGE_DATABASE_DSN` | `data.sqlite` | Chemin de la base SQLite. |
+| `XOLO_STORAGE_DATABASE_DSN` | `data.sqlite` | Base de données. Un DSN commençant par `postgres://` (ou une chaîne libpq `host=… dbname=…`) cible PostgreSQL ; toute autre valeur est interprétée comme un chemin de fichier SQLite. |
+| `XOLO_STORAGE_DATABASE_POOL_MAX_OPEN_CONNS` | `25` | Connexions ouvertes maximum (PostgreSQL uniquement ; SQLite reste sur une seule connexion). |
+| `XOLO_STORAGE_DATABASE_POOL_MAX_IDLE_CONNS` | `5` | Connexions inactives conservées dans le pool (PostgreSQL uniquement). |
+| `XOLO_STORAGE_DATABASE_POOL_CONN_MAX_LIFETIME` | `60m` | Durée de vie maximale d'une connexion (PostgreSQL uniquement). |
 | `XOLO_STORAGE_DATABASE_CACHE_USERS_*` / `_PROVIDERS_*` | — | Taille et TTL des caches en mémoire pour les utilisateurs et fournisseurs (activés par défaut, 25 entrées, 60 min). |
+
+### Choisir entre SQLite et PostgreSQL
+
+SQLite reste le défaut : aucune dépendance externe, idéal pour une instance unique. PostgreSQL est recommandé dès que plusieurs instances de Xolo partagent le même stockage, ou lorsque le volume d'événements et d'enregistrements d'usage devient important.
+
+```bash
+XOLO_STORAGE_DATABASE_DSN="postgres://xolo:motdepasse@postgres:5432/xolo?sslmode=disable"
+```
+
+Le schéma est créé et migré automatiquement au démarrage. Il n'existe pas de migration automatique des données d'une base SQLite existante vers PostgreSQL : la bascule suppose une base neuve.
 
 ## Plugins
 

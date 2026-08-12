@@ -6,7 +6,6 @@ import (
 	"github.com/xolo-gateway/xolo/internal/core/model"
 	"github.com/xolo-gateway/xolo/internal/core/port"
 	"github.com/xolo-gateway/xolo/internal/core/rbac"
-	"github.com/ncruces/go-sqlite3"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -16,13 +15,16 @@ import (
 func (s *Store) CreateRole(ctx context.Context, role model.Role) error {
 	return s.withRetry(ctx, true, func(ctx context.Context, db *gorm.DB) error {
 		if err := db.Create(fromRole(role)).Error; err != nil {
-			if isUniqueConstraintViolation(err, "roles.org_id", "roles.name") {
+			// The (org_id, name) index is spelled "roles.org_id, roles.name" by
+			// SQLite and "role_org_name_index" by PostgreSQL, whose Detail line
+			// carries "Key (org_id, name)=…": match on the column names only.
+			if isUniqueViolation(err, "org_id", "name") {
 				return errors.Wrapf(port.ErrAlreadyExists, "role %q already exists in this organization", role.Name())
 			}
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // GetRoleByID implements port.RoleStore.
@@ -37,7 +39,7 @@ func (s *Store) GetRoleByID(ctx context.Context, id model.RoleID) (model.Role, e
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +54,7 @@ func (s *Store) ListOrgRoles(ctx context.Context, orgID model.OrgID) ([]model.Ro
 			Where("org_id = ?", string(orgID)).
 			Order("builtin DESC, name ASC").
 			Find(&roles).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +101,7 @@ func (s *Store) SaveRole(ctx context.Context, role model.Role) error {
 		}
 
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // DeleteRole implements port.RoleStore. It refuses to delete builtin roles.
@@ -122,7 +124,7 @@ func (s *Store) DeleteRole(ctx context.Context, id model.RoleID) error {
 			return errors.WithStack(err)
 		}
 		return errors.WithStack(db.Delete(&Role{}, "id = ?", string(id)).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // SetMembershipRoles implements port.RoleStore. It replaces the full set of
@@ -141,7 +143,7 @@ func (s *Store) SetMembershipRoles(ctx context.Context, membershipID model.Membe
 			}
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // ListMembershipRoles implements port.RoleStore.
@@ -152,7 +154,7 @@ func (s *Store) ListMembershipRoles(ctx context.Context, membershipID model.Memb
 			Joins("JOIN membership_roles mr ON mr.role_id = roles.id").
 			Where("mr.membership_id = ?", string(membershipID)).
 			Find(&roles).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -179,7 +181,7 @@ func (s *Store) SetApplicationRoles(ctx context.Context, appID model.Application
 			}
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // ListApplicationRoles implements port.RoleStore.
@@ -190,7 +192,7 @@ func (s *Store) ListApplicationRoles(ctx context.Context, appID model.Applicatio
 			Joins("JOIN application_roles ar ON ar.role_id = roles.id").
 			Where("ar.application_id = ?", string(appID)).
 			Find(&roles).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +224,7 @@ func (s *Store) EnsureBuiltinRoles(ctx context.Context, orgID model.OrgID) error
 			}
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // ResolveEffectivePermissions implements port.RoleStore. It returns the union
@@ -241,7 +243,7 @@ func (s *Store) ResolveEffectivePermissions(ctx context.Context, userID model.Us
 			Joins("JOIN membership_roles mr ON mr.role_id = roles.id").
 			Where("mr.membership_id = ?", m.ID).
 			Find(&roles).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return rbac.PermissionSet{}, err
 	}
@@ -272,7 +274,7 @@ func (s *Store) ResolveApplicationPermissions(ctx context.Context, appID model.A
 			Joins("JOIN application_roles ar ON ar.role_id = roles.id").
 			Where("ar.application_id = ? AND roles.org_id = ?", string(appID), string(orgID)).
 			Find(&roles).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return rbac.PermissionSet{}, err
 	}

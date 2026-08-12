@@ -13,7 +13,10 @@ type Organization struct {
 	Slug        string `gorm:"uniqueIndex;not null"`
 	Name        string `gorm:"not null"`
 	Description string
-	Active      int    `gorm:"default:1"`
+	// No `default` on the flag columns below: GORM omits a zero-valued field
+	// carrying a DB default from the INSERT, which would make it impossible to
+	// ever persist a deactivation. The mappers always write these columns.
+	Active      int
 	Currency    string `gorm:"not null;default:'USD'"`
 	ShareQuotaEqually int `gorm:"column:share_quota_equally;default:0"`
 

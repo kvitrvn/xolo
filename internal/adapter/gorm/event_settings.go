@@ -6,7 +6,6 @@ import (
 
 	"github.com/xolo-gateway/xolo/internal/core/model"
 	"github.com/xolo-gateway/xolo/internal/core/port"
-	"github.com/ncruces/go-sqlite3"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 )
@@ -28,7 +27,7 @@ func (s *Store) GetMaxEvents(ctx context.Context, orgID model.OrgID) (*int, erro
 			return errors.WithStack(err)
 		}
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		if errors.Is(err, port.ErrNotFound) {
 			return nil, nil
@@ -47,7 +46,7 @@ func (s *Store) SetMaxEvents(ctx context.Context, orgID model.OrgID, maxEvents *
 			UpdatedAt: time.Now(),
 		}
 		return errors.WithStack(db.Save(&settings).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 var _ port.EventSettingsStore = &Store{}

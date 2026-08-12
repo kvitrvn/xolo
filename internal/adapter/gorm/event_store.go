@@ -7,7 +7,6 @@ import (
 	"github.com/xolo-gateway/xolo/internal/core/eventql"
 	"github.com/xolo-gateway/xolo/internal/core/model"
 	"github.com/xolo-gateway/xolo/internal/core/port"
-	"github.com/ncruces/go-sqlite3"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 )
@@ -20,7 +19,7 @@ const eventMemoryScanCap = 10000
 func (s *Store) RecordEvent(ctx context.Context, event model.Event) error {
 	return s.withRetry(ctx, true, func(ctx context.Context, db *gorm.DB) error {
 		return errors.WithStack(db.Create(fromEvent(event)).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // QueryEvents implements port.EventStore.
@@ -48,7 +47,7 @@ func (s *Store) QueryEvents(ctx context.Context, filter port.EventFilter) ([]mod
 			}
 		}
 		return errors.WithStack(query.Find(&rows).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -90,9 +89,9 @@ func (s *Store) CountEvents(ctx context.Context, orgID model.OrgID) (int64, erro
 	var count int64
 	err := s.withRetry(ctx, false, func(ctx context.Context, db *gorm.DB) error {
 		return errors.WithStack(db.Model(&Event{}).
-			Where("org_id = ? AND pinned = 0", string(orgID)).
+			Where("org_id = ? AND pinned = ?", string(orgID), false).
 			Count(&count).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return 0, err
 	}
@@ -112,7 +111,7 @@ func (s *Store) PinEvents(ctx context.Context, ids []model.EventID, incidentID m
 		return errors.WithStack(db.Model(&Event{}).
 			Where("id IN ?", strIDs).
 			Updates(map[string]any{"pinned": true, "incident_id": string(incidentID)}).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 }
 
 // EvictOverflow implements port.EventStore.
@@ -122,20 +121,24 @@ func (s *Store) EvictOverflow(ctx context.Context, orgID model.OrgID, keepN int)
 	}
 	var affected int64
 	err := s.withRetry(ctx, true, func(ctx context.Context, db *gorm.DB) error {
+		// The keep-set is materialized in a derived table: PostgreSQL forbids
+		// LIMIT directly inside an IN (...) subquery.
 		result := db.Exec(`
 			DELETE FROM events
-			WHERE org_id = ? AND pinned = 0 AND id NOT IN (
-				SELECT id FROM events
-				WHERE org_id = ? AND pinned = 0
-				ORDER BY created_at DESC
-				LIMIT ?
-			)`, string(orgID), string(orgID), keepN)
+			WHERE org_id = ? AND pinned = ? AND id NOT IN (
+				SELECT id FROM (
+					SELECT id FROM events
+					WHERE org_id = ? AND pinned = ?
+					ORDER BY created_at DESC
+					LIMIT ?
+				) AS kept
+			)`, string(orgID), false, string(orgID), false, keepN)
 		if result.Error != nil {
 			return errors.WithStack(result.Error)
 		}
 		affected = result.RowsAffected
 		return nil
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return 0, err
 	}
@@ -148,7 +151,7 @@ func (s *Store) ListEventOrgIDs(ctx context.Context) ([]model.OrgID, error) {
 	err := s.withRetry(ctx, false, func(ctx context.Context, db *gorm.DB) error {
 		return errors.WithStack(db.Model(&Event{}).
 			Distinct().Pluck("org_id", &ids).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +168,7 @@ func (s *Store) ListIncidentEvents(ctx context.Context, incidentID model.AlertIn
 	err := s.withRetry(ctx, false, func(ctx context.Context, db *gorm.DB) error {
 		return errors.WithStack(db.Where("incident_id = ?", string(incidentID)).
 			Order("created_at DESC").Find(&rows).Error)
-	}, sqlite3.BUSY, sqlite3.LOCKED)
+	})
 	if err != nil {
 		return nil, err
 	}
