@@ -137,6 +137,10 @@ it up with `GET /v1/users?active=false`, attaches it to a tenant with
 - Provisioning a tenant administrator **never** grants platform-wide privileges.
   A user created through this API receives exactly the `user` platform role, and
   the platform roles of an existing user are never modified.
+- The addresses listed in `XOLO_HTTP_AUTHN_DEFAULT_ADMINS` are reserved: writing
+  one of them on a user is refused with `422`. The authentication bridge grants
+  the platform admin role to whoever signs in with such an address, so accepting
+  it here would be an indirect privilege escalation.
 - A tenant always keeps at least one owner: removing or downgrading its last one
   is refused with `409`.
 - A role can only be assigned to a membership of the tenant it belongs to.
@@ -212,3 +216,8 @@ curl -s --cacert dev-pki/ca.crt --cert dev-pki/client.crt --key dev-pki/client.k
 - Email pre-provisioning: the existing `InviteToken` mechanism remains the email
   path, through the Web UI.
 - No generated OpenAPI specification.
+
+## User documentation
+
+A French user-facing version of this page lives in
+[`docs/fr/administration/provisioning/provisioning.md`](../../docs/fr/administration/provisioning/provisioning.md).
