@@ -21,8 +21,10 @@ func (h *Handler) handleListRoles(w http.ResponseWriter, r *http.Request) {
 		items = append(items, newRoleDTO(role))
 	}
 
-	// Roles are not paginated: an organization holds a handful of them.
-	writeJSON(w, http.StatusOK, newListDTO(items, 1, len(items), int64(len(items))))
+	// Roles are not paginated: an organization holds a handful of them. The
+	// envelope still advertises the regular page size, so a client computing a
+	// page count out of total/limit never divides by zero on an empty tenant.
+	writeJSON(w, http.StatusOK, newListDTO(items, 1, maxPageLimit, int64(len(items))))
 }
 
 func (h *Handler) handleCreateRole(w http.ResponseWriter, r *http.Request) {

@@ -28,5 +28,10 @@ var getProvisioningServiceFromConfig = createFromConfigOnce(func(ctx context.Con
 		return nil, errors.WithStack(err)
 	}
 
-	return service.NewProvisioningService(orgStore, userStore, roleStore), nil
+	// The default administrators are granted the platform admin role by the
+	// authentication bridge on sign-in: the API must not be able to hand one of
+	// those addresses to an arbitrary user.
+	return service.NewProvisioningService(orgStore, userStore, roleStore,
+		service.WithReservedEmails(conf.HTTP.Authn.DefaultAdmins...),
+	), nil
 })

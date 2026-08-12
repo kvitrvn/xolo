@@ -56,11 +56,20 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	shutdownDone := make(chan struct{})
+	// serveDone releases the watcher when serving stops on its own — a failed
+	// bind, an unreadable key — instead of leaving it parked on ctx for the
+	// lifetime of whoever embeds this server.
+	serveDone := make(chan struct{})
+	defer close(serveDone)
 
 	go func() {
 		defer close(shutdownDone)
 
-		<-ctx.Done()
+		select {
+		case <-ctx.Done():
+		case <-serveDone:
+			return
+		}
 
 		// Detached from ctx, which is already canceled, so in-flight requests
 		// keep the timeout they are entitled to.

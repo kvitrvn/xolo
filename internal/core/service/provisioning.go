@@ -26,14 +26,55 @@ type ProvisioningService struct {
 	orgStore  port.OrgStore
 	userStore port.UserStore
 	roleStore port.RoleStore
+
+	// reservedEmails lists the addresses the API must never write on a user.
+	// They are the instance's default administrators: the authentication bridge
+	// grants the platform admin role to whoever signs in with one of them, so
+	// setting such an address here would be an indirect privilege escalation.
+	reservedEmails []string
 }
 
-func NewProvisioningService(orgStore port.OrgStore, userStore port.UserStore, roleStore port.RoleStore) *ProvisioningService {
-	return &ProvisioningService{
+type ProvisioningServiceOptionFunc func(*ProvisioningService)
+
+// WithReservedEmails declares addresses the Provisionning API refuses to assign
+// to a user. Matching is case-insensitive.
+func WithReservedEmails(emails ...string) ProvisioningServiceOptionFunc {
+	return func(s *ProvisioningService) {
+		s.reservedEmails = make([]string, 0, len(emails))
+		for _, email := range emails {
+			if trimmed := strings.TrimSpace(email); trimmed != "" {
+				s.reservedEmails = append(s.reservedEmails, strings.ToLower(trimmed))
+			}
+		}
+	}
+}
+
+func NewProvisioningService(orgStore port.OrgStore, userStore port.UserStore, roleStore port.RoleStore, funcs ...ProvisioningServiceOptionFunc) *ProvisioningService {
+	s := &ProvisioningService{
 		orgStore:  orgStore,
 		userStore: userStore,
 		roleStore: roleStore,
 	}
+
+	for _, fn := range funcs {
+		fn(s)
+	}
+
+	return s
+}
+
+// assertEmailAllowed rejects an email reserved for the instance administrators.
+func (s *ProvisioningService) assertEmailAllowed(email *string) error {
+	if email == nil {
+		return nil
+	}
+
+	normalized := strings.ToLower(strings.TrimSpace(*email))
+	if slices.Contains(s.reservedEmails, normalized) {
+		return errors.Wrapf(port.ErrInvalid, "email %q is reserved for the instance administrators", normalized)
+	}
+
+	return nil
 }
 
 // slugPattern matches a DNS-label-like identifier, the form external systems
@@ -280,6 +321,10 @@ func (s *ProvisioningService) ProvisionUser(ctx context.Context, params UserIden
 		return nil, false, errors.WithStack(err)
 	}
 
+	if err := s.assertEmailAllowed(params.Email); err != nil {
+		return nil, false, errors.WithStack(err)
+	}
+
 	existing, err := s.userStore.GetUserByIdentity(ctx, params.Provider, params.Subject)
 	if err != nil && !errors.Is(err, port.ErrNotFound) {
 		return nil, false, errors.WithStack(err)
@@ -303,7 +348,8 @@ func (s *ProvisioningService) ProvisionUser(ctx context.Context, params UserIden
 	// FindOrCreateUser may have found a user created concurrently between our
 	// read and this call. Only a genuinely fresh user gets its platform roles
 	// initialized, so an existing user never has its roles reset here.
-	if len(user.Roles()) == 0 {
+	fresh := len(user.Roles()) == 0
+	if fresh {
 		user.SetRoles(model.PlatformRoleUser)
 	}
 
@@ -319,15 +365,19 @@ func (s *ProvisioningService) ProvisionUser(ctx context.Context, params UserIden
 
 	if err := s.userStore.SaveUser(ctx, user); err != nil {
 		// The user row already exists but holds none of the requested fields.
-		// Drop it so a retry starts from a clean state.
-		if deleteErr := s.userStore.DeleteUser(ctx, user.ID()); deleteErr != nil {
-			slog.ErrorContext(ctx, "could not rollback partially created user",
-				slog.String("userID", string(user.ID())), slogx.Error(errors.WithStack(deleteErr)))
+		// Drop it so a retry starts from a clean state — but only when we are the
+		// ones who created it: a row handed back by a concurrent provisioning
+		// belongs to that request, and deleting it would revoke its auth tokens.
+		if fresh {
+			if deleteErr := s.userStore.DeleteUser(ctx, user.ID()); deleteErr != nil {
+				slog.ErrorContext(ctx, "could not rollback partially created user",
+					slog.String("userID", string(user.ID())), slogx.Error(errors.WithStack(deleteErr)))
+			}
 		}
 		return nil, false, errors.WithStack(err)
 	}
 
-	return user, true, nil
+	return user, fresh, nil
 }
 
 func (s *ProvisioningService) GetUser(ctx context.Context, userID model.UserID) (model.User, error) {
@@ -385,6 +435,10 @@ func (s *ProvisioningService) UpdateUser(ctx context.Context, userID model.UserI
 // applyUserFields writes the provided fields on an existing user, leaving its
 // platform roles untouched. It skips the write entirely when nothing changes.
 func (s *ProvisioningService) applyUserFields(ctx context.Context, user model.User, email, displayName *string, active *bool) (model.User, error) {
+	if err := s.assertEmailAllowed(email); err != nil {
+		return nil, errors.WithStack(err)
+	}
+
 	updated := model.CopyUser(user)
 	changed := false
 

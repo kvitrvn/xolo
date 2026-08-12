@@ -661,4 +661,34 @@ func TestProvisionUser(t *testing.T) {
 			t.Errorf("platform roles: got %v", reloaded.Roles())
 		}
 	})
+
+	t.Run("refuses an email reserved for the instance administrators", func(t *testing.T) {
+		db, err := gormpkg.Open(gormlite.Open(":memory:"), &gormpkg.Config{})
+		if err != nil {
+			t.Fatalf("open db: %v", err)
+		}
+
+		store := xologorm.NewStore(db)
+		svc := service.NewProvisioningService(store, store, store,
+			service.WithReservedEmails("boss@corp.tld"),
+		)
+
+		params := *ownerParams()
+		params.Email = strPtr("Boss@Corp.tld")
+
+		if _, _, err := svc.ProvisionUser(ctx, params); !errors.Is(err, port.ErrInvalid) {
+			t.Errorf("provision with reserved email: got %v, want port.ErrInvalid", err)
+		}
+
+		user, _, err := svc.ProvisionUser(ctx, *ownerParams())
+		if err != nil {
+			t.Fatalf("provision: %v", err)
+		}
+
+		if _, err := svc.UpdateUser(ctx, user.ID(), service.UpdateUserParams{
+			Email: strPtr("boss@corp.tld"),
+		}); !errors.Is(err, port.ErrInvalid) {
+			t.Errorf("update with reserved email: got %v, want port.ErrInvalid", err)
+		}
+	})
 }
