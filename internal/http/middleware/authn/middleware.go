@@ -39,7 +39,7 @@ func Middleware(onUnauthorized func(w http.ResponseWriter, r *http.Request), aut
 				}
 
 				ctx := r.Context()
-				ctx = setContextUser(ctx, user)
+				ctx = SetContextUser(ctx, user)
 
 				r = r.WithContext(ctx)
 

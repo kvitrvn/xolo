@@ -10,9 +10,14 @@ type HTTP struct {
 	RateLimit HTTPRateLimit `envPrefix:"RATE_LIMIT_"`
 }
 type Authn struct {
-	Providers             AuthProviders `envPrefix:"PROVIDERS_"`
-	DefaultAdmins         []string      `env:"DEFAULT_ADMINS" envSeparator:","`
-	ActiveByDefault       bool          `env:"ACTIVE_BY_DEFAULT" envDefault:"false"`
+	Providers       AuthProviders `envPrefix:"PROVIDERS_"`
+	DefaultAdmins   []string      `env:"DEFAULT_ADMINS" envSeparator:","`
+	ActiveByDefault bool          `env:"ACTIVE_BY_DEFAULT" envDefault:"false"`
+	// AutoCreateUsers controls whether an identity unknown to Xolo gets an
+	// account on its first successful authentication. When false, only
+	// pre-provisioned identities can sign in; the addresses listed in
+	// DefaultAdmins remain an exception so a fresh instance can be bootstrapped.
+	AutoCreateUsers       bool          `env:"AUTO_CREATE_USERS" envDefault:"true"`
 	CookiesToCheck        []string      `env:"COOKIES_TO_CHECK" envSeparator:"," envDefault:"oauth_id_token"`
 	OIDCTokenExpiryLeeway time.Duration `env:"OIDCTOKEN_EXPIRY_LEEWAY" envDefault:"0"`
 	OAuth2Token           OAuth2Token   `envPrefix:"OAUTH2TOKEN_"`

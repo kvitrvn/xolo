@@ -1,0 +1,43 @@
+package setup
+
+import (
+	"context"
+
+	"github.com/xolo-gateway/xolo/internal/config"
+	"github.com/xolo-gateway/xolo/internal/provisionning"
+	v1 "github.com/xolo-gateway/xolo/internal/provisionning/handler/v1"
+	"github.com/pkg/errors"
+)
+
+// NewProvisionningAPIServerFromConfig assembles the Provisionning API server.
+// It returns a nil server when the API is disabled, which the caller treats as
+// "nothing to run".
+//
+// The TLS material is loaded here, before any listener is opened, so a
+// misconfiguration is fatal at startup rather than on the first request.
+func NewProvisionningAPIServerFromConfig(ctx context.Context, conf *config.Config) (*provisionning.Server, error) {
+	if !conf.ProvisionningAPI.Enabled {
+		return nil, nil
+	}
+
+	provisioning, err := getProvisioningServiceFromConfig(ctx, conf)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	tlsConfig, err := provisionning.LoadTLSConfig(
+		conf.ProvisionningAPI.TLSCertFile,
+		conf.ProvisionningAPI.TLSKeyFile,
+		conf.ProvisionningAPI.TLSClientCAFile,
+	)
+	if err != nil {
+		return nil, errors.Wrap(err, "could not load provisionning api tls configuration")
+	}
+
+	return provisionning.NewServer(
+		provisionning.WithAddress(conf.ProvisionningAPI.Address),
+		provisionning.WithTLSConfig(tlsConfig),
+		provisionning.WithHandler(v1.NewHandler(provisioning)),
+		provisionning.WithShutdownTimeout(conf.ProvisionningAPI.ShutdownTimeout),
+	), nil
+}

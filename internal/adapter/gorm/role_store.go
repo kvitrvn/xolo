@@ -14,7 +14,16 @@ import (
 // CreateRole implements port.RoleStore.
 func (s *Store) CreateRole(ctx context.Context, role model.Role) error {
 	return s.withRetry(ctx, true, func(ctx context.Context, db *gorm.DB) error {
-		return errors.WithStack(db.Create(fromRole(role)).Error)
+		if err := db.Create(fromRole(role)).Error; err != nil {
+			// The (org_id, name) index is spelled "roles.org_id, roles.name" by
+			// SQLite and "role_org_name_index" by PostgreSQL, whose Detail line
+			// carries "Key (org_id, name)=…": match on the column names only.
+			if isUniqueViolation(err, "org_id", "name") {
+				return errors.Wrapf(port.ErrAlreadyExists, "role %q already exists in this organization", role.Name())
+			}
+			return errors.WithStack(err)
+		}
+		return nil
 	})
 }
 

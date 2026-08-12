@@ -83,6 +83,19 @@ Le schéma est créé et migré automatiquement au démarrage. Il n'existe pas d
 | `XOLO_EVENTS_EVALUATION_INTERVAL` | `30s` | Fréquence d'évaluation des alertes. |
 | `XOLO_EVENTS_PURGE_INTERVAL` | `5m` | Fréquence de purge de la fenêtre glissante. |
 
+## API de provisioning
+
+Écouteur d'administration dédié, protégé par TLS mutuel. Voir [API de provisioning](../provisioning/provisioning.md).
+
+| Variable | Défaut | Description |
+| --- | --- | --- |
+| `XOLO_PROVISIONNING_API_ENABLED` | `false` | Ouvre l'écouteur d'administration. |
+| `XOLO_PROVISIONNING_API_ADDRESS` | `:3003` | Adresse d'écoute. |
+| `XOLO_PROVISIONNING_API_TLS_CERT_FILE` | _(requis si activé)_ | Certificat serveur (PEM). |
+| `XOLO_PROVISIONNING_API_TLS_KEY_FILE` | _(requis si activé)_ | Clé privée du serveur (PEM). |
+| `XOLO_PROVISIONNING_API_TLS_CLIENT_CA_FILE` | _(requis si activé)_ | Autorité vérifiant les certificats clients. |
+| `XOLO_PROVISIONNING_API_SHUTDOWN_TIMEOUT` | `10s` | Délai d'arrêt gracieux. |
+
 ## Taux de change et tâches de fond
 
 | Variable | Défaut | Description |

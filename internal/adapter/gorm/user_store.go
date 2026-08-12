@@ -80,6 +80,29 @@ func (s *Store) GetUserByID(ctx context.Context, userID model.UserID) (model.Use
 	return &wrappedUser{&user}, nil
 }
 
+// GetUserByIdentity implements port.UserStore.
+func (s *Store) GetUserByIdentity(ctx context.Context, provider, subject string) (model.User, error) {
+	var user User
+
+	err := s.withRetry(ctx, false, func(ctx context.Context, db *gorm.DB) error {
+		err := db.Preload("Roles").Preload("Preferences").
+			Where("provider = ? AND subject = ?", provider, subject).
+			First(&user).Error
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errors.WithStack(port.ErrNotFound)
+			}
+			return errors.WithStack(err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	return &wrappedUser{&user}, nil
+}
+
 // SaveUser implements port.UserStore.
 func (s *Store) SaveUser(ctx context.Context, user model.User) error {
 	err := s.withRetry(ctx, true, func(ctx context.Context, db *gorm.DB) error {

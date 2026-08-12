@@ -14,7 +14,26 @@ import (
 	"github.com/xolo-gateway/xolo/internal/http/middleware/authz"
 )
 
-func Middleware(userStore port.UserStore, emitter port.EventEmitter, activeByDefault bool, defaultAdmins ...string) func(http.Handler) http.Handler {
+// Options configures how the bridge turns an authenticated identity into a
+// Xolo user.
+type Options struct {
+	// ActiveByDefault is the initial state of an account created here. An
+	// inactive account exists but is refused by the authorization middleware
+	// until an administrator activates it.
+	ActiveByDefault bool
+
+	// AutoCreateUsers allows an identity unknown to Xolo to get an account on
+	// its first successful authentication. When false, only pre-provisioned
+	// identities can sign in — DefaultAdmins excepted, so a fresh instance can
+	// still be bootstrapped.
+	AutoCreateUsers bool
+
+	// DefaultAdmins lists the e-mail addresses that are granted the platform
+	// admin role on sign-in.
+	DefaultAdmins []string
+}
+
+func Middleware(userStore port.UserStore, emitter port.EventEmitter, opts Options) func(http.Handler) http.Handler {
 	emitLoginFailed := func(ctx context.Context, authnUser *authn.User, reason string) {
 		if emitter == nil || authnUser == nil {
 			return
@@ -37,33 +56,52 @@ func Middleware(userStore port.UserStore, emitter port.EventEmitter, activeByDef
 				return
 			}
 
-			user, err := userStore.FindOrCreateUser(ctx, authnUser.Provider, authnUser.Subject)
+			isDefaultAdmin := slices.Contains(opts.DefaultAdmins, authnUser.Email)
+
+			user, err := userStore.GetUserByIdentity(ctx, authnUser.Provider, authnUser.Subject)
 			if err != nil {
-				if errors.Is(err, port.ErrNotFound) {
-					user = model.NewUser(authnUser.Provider, authnUser.Subject, authnUser.Email, authnUser.DisplayName, activeByDefault, authz.RoleUser)
+				if !errors.Is(err, port.ErrNotFound) {
+					common.HandleError(w, r, err)
+					return
+				}
 
-					if err := userStore.SaveUser(ctx, user); err != nil {
-						if errors.Is(err, port.ErrAlreadyExists) {
-							emitLoginFailed(ctx, authnUser, "un compte existe déjà avec cette adresse email")
-							common.HandleError(w, r, common.NewError(
-								err.Error(),
-								"Un compte existe déjà avec cette adresse email. Contactez un administrateur pour faire fusionner vos comptes.",
-								http.StatusConflict,
-							))
-							return
-						}
+				// The identity authenticated successfully but Xolo knows
+				// nothing about it. Default admins are the exception: they are
+				// the only way to bootstrap an instance that has no user yet.
+				if !opts.AutoCreateUsers && !isDefaultAdmin {
+					emitLoginFailed(ctx, authnUser, "aucun compte ne correspond à cette identité et la création automatique est désactivée")
+					common.HandleError(w, r, common.NewError(
+						"user account auto-creation is disabled",
+						"Aucun compte Xolo n'est associé à cette identité. Contactez un administrateur pour qu'il vous crée un accès.",
+						http.StatusForbidden,
+					))
+					return
+				}
 
-						common.HandleError(w, r, err)
+				user = model.NewUser(
+					authnUser.Provider, authnUser.Subject, authnUser.Email, authnUser.DisplayName,
+					opts.ActiveByDefault || isDefaultAdmin,
+					authz.RoleUser,
+				)
+
+				if err := userStore.SaveUser(ctx, user); err != nil {
+					if errors.Is(err, port.ErrAlreadyExists) {
+						emitLoginFailed(ctx, authnUser, "un compte existe déjà avec cette adresse email")
+						common.HandleError(w, r, common.NewError(
+							err.Error(),
+							"Un compte existe déjà avec cette adresse email. Contactez un administrateur pour faire fusionner vos comptes.",
+							http.StatusConflict,
+						))
 						return
 					}
-				} else {
+
 					common.HandleError(w, r, err)
 					return
 				}
 			}
 
 			missingRole := len(user.Roles()) == 0
-			shouldBeAdmin := slices.Contains(defaultAdmins, authnUser.Email) && !slices.Contains(user.Roles(), authz.RoleAdmin)
+			shouldBeAdmin := isDefaultAdmin && !slices.Contains(user.Roles(), authz.RoleAdmin)
 
 			// Never overwrite a stored value with an empty incoming one: some
 			// authenticators (e.g. OAuth2 introspection) resolve an identity

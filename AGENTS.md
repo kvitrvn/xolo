@@ -36,6 +36,9 @@ internal/
   core/
     model/      — domain types: User, AuthToken, Task
     port/       — interfaces: UserStore, TaskRunner, error sentinels
+    service/    — orchestration across stores (QuotaService, ProvisioningService)
+  provisionning/ — instance provisionning API: own listener, own port, mutual TLS
+    handler/v1/ — versioned M2M REST API (tenants, members, roles, users)
   adapter/
     gorm/       — GORM implementation of the stores (SQLite or PostgreSQL, see internal/adapter/gorm/dialect.go)
                   store tests go through eachBackend() so every behaviour is asserted on both backends
@@ -65,8 +68,17 @@ internal/
 ### Key wiring
 
 - `internal/setup/http_server.go` — assembles the full HTTP server from config; this is the composition root
+- `internal/setup/provisionning_api_server.go` — assembles the Provisionning API server; returns nil when disabled
 - `internal/setup/helper.go` — `createFromConfigOnce` pattern: each dependency is created at most once per config
 - The genai proxy is mounted at `/v1/` and sits behind auth middleware
+- `cmd/server` runs the public HTTP server and, when enabled, the Provisionning API server on the same root context; the first fatal error stops both
+
+### Provisionning API
+
+Machine-to-machine provisioning of tenants, members, roles and users, on a
+dedicated listener authenticated by mutual TLS only (`XOLO_PROVISIONNING_API_*`,
+disabled by default). It never grants platform-wide privileges and shares the
+same store instances as the public server. See `internal/provisionning/README.md`.
 
 ### UI / templating
 

@@ -60,17 +60,16 @@ func fromUser(u model.User) *User {
 		Active:      u.Active(),
 	}
 
-	prefs := u.Preferences()
-
-	darkMode, darkModeExists := prefs.DarkMode()
-
 	user.Preferences = &UserPreferences{
 		UserID:   string(u.ID()),
 		DarkMode: nil,
 	}
 
-	if darkModeExists {
-		user.Preferences.DarkMode = &darkMode
+	// A model.User implementation may carry no preferences at all.
+	if prefs := u.Preferences(); prefs != nil {
+		if darkMode, exists := prefs.DarkMode(); exists {
+			user.Preferences.DarkMode = &darkMode
+		}
 	}
 
 	for _, r := range u.Roles() {

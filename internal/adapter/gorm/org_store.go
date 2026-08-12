@@ -13,7 +13,13 @@ import (
 // CreateOrg implements port.OrgStore.
 func (s *Store) CreateOrg(ctx context.Context, org model.Organization) error {
 	return s.withRetry(ctx, true, func(ctx context.Context, db *gorm.DB) error {
-		return errors.WithStack(db.Create(fromOrganization(org)).Error)
+		if err := db.Create(fromOrganization(org)).Error; err != nil {
+			if isUniqueViolation(err, "organizations", "slug") {
+				return errors.Wrapf(port.ErrAlreadyExists, "slug %q is already used by another organization", org.Slug())
+			}
+			return errors.WithStack(err)
+		}
+		return nil
 	})
 }
 
@@ -95,17 +101,85 @@ func (s *Store) SaveOrg(ctx context.Context, org model.Organization) error {
 	})
 }
 
-// DeleteOrg implements port.OrgStore.
+// DeleteOrg implements port.OrgStore. It removes every row scoped to the
+// organization before deleting it: the tables that declare a foreign key on
+// `organizations` have no database-level cascade, and the remaining org-scoped
+// tables would otherwise be orphaned — in particular the applications and their
+// auth tokens, which stay resolvable by FindAuthToken as long as they exist.
 func (s *Store) DeleteOrg(ctx context.Context, id model.OrgID) error {
 	return s.withRetry(ctx, true, func(ctx context.Context, db *gorm.DB) error {
-		result := db.Delete(&Organization{}, "id = ?", string(id))
-		if result.Error != nil {
-			return errors.WithStack(result.Error)
+		var exists Organization
+		if err := db.Select("id").First(&exists, "id = ?", string(id)).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errors.WithStack(port.ErrNotFound)
+			}
+			return errors.WithStack(err)
 		}
-		if result.RowsAffected == 0 {
-			return errors.WithStack(port.ErrNotFound)
+
+		// Subqueries are evaluated when the DELETE they belong to runs, so every
+		// statement using them must be issued before its parent rows are gone.
+		membershipIDs := db.Model(&Membership{}).Select("id").Where("org_id = ?", string(id))
+		roleIDs := db.Model(&Role{}).Select("id").Where("org_id = ?", string(id))
+		applicationIDs := db.Model(&Application{}).Select("id").Where("org_id = ?", string(id))
+		alertIDs := db.Model(&Alert{}).Select("id").Where("org_id = ?", string(id))
+
+		if err := db.Where("membership_id IN (?)", membershipIDs).Delete(&MembershipRole{}).Error; err != nil {
+			return errors.WithStack(err)
 		}
-		return nil
+
+		if err := db.Where("role_id IN (?)", roleIDs).Delete(&MembershipRole{}).Error; err != nil {
+			return errors.WithStack(err)
+		}
+		if err := db.Where("role_id IN (?)", roleIDs).Delete(&ApplicationRole{}).Error; err != nil {
+			return errors.WithStack(err)
+		}
+		if err := db.Where("role_id IN (?)", roleIDs).Delete(&RolePermission{}).Error; err != nil {
+			return errors.WithStack(err)
+		}
+		if err := db.Where("role_id IN (?)", roleIDs).Delete(&RoleModel{}).Error; err != nil {
+			return errors.WithStack(err)
+		}
+
+		if err := db.Where("application_id IN (?)", applicationIDs).Delete(&ApplicationRole{}).Error; err != nil {
+			return errors.WithStack(err)
+		}
+		if err := db.Where("org_id = ? OR application_id IN (?)", string(id), applicationIDs).Delete(&AuthToken{}).Error; err != nil {
+			return errors.WithStack(err)
+		}
+		if err := db.Where("scope = ? AND scope_id IN (?)", string(model.QuotaScopeApplication), applicationIDs).Delete(&Quota{}).Error; err != nil {
+			return errors.WithStack(err)
+		}
+		if err := db.Where("alert_id IN (?)", alertIDs).Delete(&AlertIncident{}).Error; err != nil {
+			return errors.WithStack(err)
+		}
+
+		if err := db.Where("scope = ? AND scope_id = ?", string(model.QuotaScopeOrg), string(id)).Delete(&Quota{}).Error; err != nil {
+			return errors.WithStack(err)
+		}
+
+		orgScoped := []any{
+			&Application{},
+			&Membership{},
+			&InviteToken{},
+			&Role{},
+			&Alert{},
+			&AlertIncident{},
+			&UsageRecord{},
+			&Event{},
+			&EventSettings{},
+			&VirtualModel{},
+			&Middleware{},
+			&PluginNodeSecret{},
+			&Provider{},
+			&LLMModel{},
+		}
+		for _, m := range orgScoped {
+			if err := db.Where("org_id = ?", string(id)).Delete(m).Error; err != nil {
+				return errors.WithStack(err)
+			}
+		}
+
+		return errors.WithStack(db.Delete(&Organization{}, "id = ?", string(id)).Error)
 	})
 }
 
@@ -116,9 +190,15 @@ func (s *Store) AddMember(ctx context.Context, membership model.Membership) erro
 	})
 }
 
-// RemoveMember implements port.OrgStore.
+// RemoveMember implements port.OrgStore. The membership_roles rows are deleted
+// first: the join table references the membership and has no database-level
+// cascade, so removing a member holding any role would otherwise fail.
 func (s *Store) RemoveMember(ctx context.Context, id model.MembershipID) error {
 	return s.withRetry(ctx, true, func(ctx context.Context, db *gorm.DB) error {
+		if err := db.Where("membership_id = ?", string(id)).Delete(&MembershipRole{}).Error; err != nil {
+			return errors.WithStack(err)
+		}
+
 		result := db.Delete(&Membership{}, "id = ?", string(id))
 		if result.Error != nil {
 			return errors.WithStack(result.Error)

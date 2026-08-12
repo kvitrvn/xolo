@@ -70,6 +70,54 @@ func scenarioOrgStoreLifecycle(t *testing.T, store *xologorm.Store) {
 	}
 }
 
+func TestOrgStore_DeletePurgesScopedData(t *testing.T) {
+	eachBackend(t, scenarioOrgStoreDeletePurgesScopedData)
+}
+
+// Deleting a tenant must leave nothing behind, in particular no application and
+// no auth token that would still resolve after the organization is gone.
+func scenarioOrgStoreDeletePurgesScopedData(t *testing.T, store *xologorm.Store) {
+	ctx := context.Background()
+
+	org := model.NewOrganization("acme", "Acme Corp", "")
+	if err := store.CreateOrg(ctx, org); err != nil {
+		t.Fatalf("CreateOrg: %v", err)
+	}
+
+	app := model.NewApplication(org.ID(), "CI", "", true)
+	if err := store.CreateApplication(ctx, app); err != nil {
+		t.Fatalf("CreateApplication: %v", err)
+	}
+
+	token := model.NewApplicationAuthToken(app, org.ID(), "ci-token", "app-token-value", nil)
+	if err := store.CreateApplicationAuthToken(ctx, token); err != nil {
+		t.Fatalf("CreateApplicationAuthToken: %v", err)
+	}
+
+	if err := store.EnsureBuiltinRoles(ctx, org.ID()); err != nil {
+		t.Fatalf("EnsureBuiltinRoles: %v", err)
+	}
+
+	if err := store.DeleteOrg(ctx, org.ID()); err != nil {
+		t.Fatalf("DeleteOrg: %v", err)
+	}
+
+	if _, err := store.GetApplication(ctx, app.ID()); !errors.Is(err, port.ErrNotFound) {
+		t.Errorf("GetApplication (after org delete): expected port.ErrNotFound, got %v", err)
+	}
+	if _, err := store.FindApplicationAuthToken(ctx, "app-token-value"); !errors.Is(err, port.ErrNotFound) {
+		t.Errorf("FindApplicationAuthToken (after org delete): expected port.ErrNotFound, got %v", err)
+	}
+
+	roles, err := store.ListOrgRoles(ctx, org.ID())
+	if err != nil {
+		t.Fatalf("ListOrgRoles (after org delete): %v", err)
+	}
+	if len(roles) != 0 {
+		t.Errorf("expected the org roles to be purged, got %d", len(roles))
+	}
+}
+
 func TestOrgStore_ListPagination(t *testing.T) {
 	eachBackend(t, scenarioOrgStoreListPagination)
 }

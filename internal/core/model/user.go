@@ -6,6 +6,14 @@ import (
 	"github.com/rs/xid"
 )
 
+// Platform-wide roles, carried by User.Roles(). They are distinct from the
+// organization-scoped roles of the RBAC system: holding an org owner/admin role
+// never grants any of these.
+const (
+	PlatformRoleUser  = "user"
+	PlatformRoleAdmin = "admin"
+)
+
 type UserID string
 
 func NewUserID() UserID {
@@ -104,6 +112,7 @@ func NewUser(provider, subject, email string, displayName string, active bool, r
 		provider:    provider,
 		roles:       roles,
 		active:      active,
+		preferences: NewUserPreferences(),
 	}
 }
 
