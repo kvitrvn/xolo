@@ -164,3 +164,38 @@ func TestMultiTenant(t *testing.T) {
 		})
 	}
 }
+
+func TestMatchesHost(t *testing.T) {
+	multi := config.Multitenancy{
+		Enabled:           true,
+		HostPattern:       "{tenant}.xolo.example.com",
+		DefaultTenantSlug: model.DefaultTenantSlug,
+	}
+
+	for name, testCase := range map[string]struct {
+		conf config.Multitenancy
+		host string
+		want bool
+	}{
+		"framed by the pattern":       {conf: multi, host: "acme.xolo.example.com", want: true},
+		"port is ignored":             {conf: multi, host: "acme.xolo.example.com:3002", want: true},
+		"case is ignored":             {conf: multi, host: "ACME.Xolo.Example.Com", want: true},
+		"outside the pattern":         {conf: multi, host: "evil.example.com", want: false},
+		"bare suffix names no tenant": {conf: multi, host: "xolo.example.com", want: false},
+		"slug is not a dns label":     {conf: multi, host: "not_a_label.xolo.example.com", want: false},
+		"empty host":                  {conf: multi, host: "", want: false},
+		"single tenant matches anything": {
+			conf: config.Multitenancy{Enabled: false, DefaultTenantSlug: model.DefaultTenantSlug},
+			host: "whatever.example.com",
+			want: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			resolver := tenant.NewResolver(newStore(), testCase.conf)
+
+			if got := resolver.MatchesHost(testCase.host); got != testCase.want {
+				t.Errorf("MatchesHost(%q): got %t, want %t", testCase.host, got, testCase.want)
+			}
+		})
+	}
+}

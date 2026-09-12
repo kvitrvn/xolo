@@ -2,11 +2,15 @@ package oidc
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 
+	"github.com/bornholm/go-x/slogx"
+	"github.com/gorilla/sessions"
+	"github.com/pkg/errors"
+	httpCtx "github.com/xolo-gateway/xolo/internal/http/context"
 	"github.com/xolo-gateway/xolo/internal/http/middleware/authn/oauth2token"
 	"github.com/xolo-gateway/xolo/internal/http/middleware/authn/oidctoken"
-	"github.com/gorilla/sessions"
 )
 
 type ProviderWithJWKS struct {
@@ -37,6 +41,7 @@ type Handler struct {
 	sessionName      string
 	providers       []Provider
 	providersWithJWKS []ProviderWithJWKS
+	resolveProvider  ProviderResolver
 }
 
 // ServeHTTP implements http.Handler.
@@ -52,13 +57,14 @@ func NewHandler(sessionStore sessions.Store, funcs ...OptionFunc) *Handler {
 		sessionName:      opts.SessionName,
 		providers:       opts.Providers,
 		providersWithJWKS: opts.ProvidersWithJWKS,
+		resolveProvider:  opts.ResolveProvider,
 	}
 
 	h.mux.HandleFunc("GET /login", h.getLoginPage)
-	h.mux.Handle("GET /providers/{provider}", withContextProvider(http.HandlerFunc(h.handleProvider)))
-	h.mux.Handle("GET /providers/{provider}/callback", withContextProvider(http.HandlerFunc(h.handleProviderCallback)))
+	h.mux.Handle("GET /providers/{provider}", h.withContextProvider(http.HandlerFunc(h.handleProvider)))
+	h.mux.Handle("GET /providers/{provider}/callback", h.withContextProvider(http.HandlerFunc(h.handleProviderCallback)))
 	h.mux.HandleFunc("GET /logout", h.handleLogout)
-	h.mux.Handle("GET /providers/{provider}/logout", withContextProvider(http.HandlerFunc(h.handleProviderLogout)))
+	h.mux.Handle("GET /providers/{provider}/logout", h.withContextProvider(http.HandlerFunc(h.handleProviderLogout)))
 
 	return h
 }
@@ -104,11 +110,31 @@ func (h *Handler) ProvidersForTokenValidation() []oauth2token.Provider {
 
 var _ http.Handler = &Handler{}
 
-func withContextProvider(h http.Handler) http.Handler {
+// withContextProvider names the goth provider the request must be served by.
+// gothic reads that context value before the route parameter, which is what
+// lets a multi-tenant instance answer on a host-scoped provider while the route
+// keeps the bare provider ID.
+func (h *Handler) withContextProvider(next http.Handler) http.Handler {
 	fn := func(w http.ResponseWriter, r *http.Request) {
 		provider := r.PathValue("provider")
+
+		if h.resolveProvider != nil {
+			resolved, err := h.resolveProvider(provider, httpCtx.BaseURL(r.Context()).String())
+			if err != nil {
+				// An unknown provider on an otherwise valid host is a 404, like any
+				// route that does not exist: the ID comes straight from the URL.
+				slog.WarnContext(r.Context(), "could not resolve oidc provider",
+					slog.String("provider", provider), slogx.Error(errors.WithStack(err)))
+				http.NotFound(w, r)
+
+				return
+			}
+
+			provider = resolved
+		}
+
 		r = r.WithContext(context.WithValue(r.Context(), "provider", provider))
-		h.ServeHTTP(w, r)
+		next.ServeHTTP(w, r)
 	}
 
 	return http.HandlerFunc(fn)

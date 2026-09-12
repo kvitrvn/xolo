@@ -269,8 +269,10 @@ func NewHTTPServerFromConfig(ctx context.Context, conf *config.Config) (*http.Se
 	// within a tenant, so no route may run before the tenant is known. A host
 	// matching none answers 404 — an unknown subdomain must not reveal whether
 	// the instance exists.
+	tenantResolver := tenant.NewResolver(tenantStore, conf.Multitenancy)
+
 	tenantMiddleware := tenant.Middleware(
-		tenant.NewResolver(tenantStore, conf.Multitenancy),
+		tenantResolver,
 		gohttp.HandlerFunc(func(w gohttp.ResponseWriter, r *gohttp.Request) {
 			common.HandleError(w, r, common.NewHTTPError(gohttp.StatusNotFound))
 		}),
@@ -327,6 +329,18 @@ func NewHTTPServerFromConfig(ctx context.Context, conf *config.Config) (*http.Se
 		http.WithRoute("GET /api/personal-models/pipeline-node-types", rateLimiter(apiAuthChain(apiHandler))),
 		http.WithRoute("GET /api/personal-models/pipeline-models", rateLimiter(apiAuthChain(apiHandler))),
 		http.WithMount("/", authChain(withMemberships(webuiHandler))),
+	}
+
+	// In multi-tenant mode the public base URL is not an instance-wide constant:
+	// each tenant is served on its own hostname, and every link, redirect and
+	// OAuth callback must stay on the host the request came in on.
+	if conf.Multitenancy.Enabled {
+		resolveBaseURL, err := newTenantBaseURLResolver(conf.HTTP.BaseURL, tenantResolver.MatchesHost)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+
+		options = append(options, http.WithBaseURLResolver(resolveBaseURL))
 	}
 
 	server := http.NewServer(options...)

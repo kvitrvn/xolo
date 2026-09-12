@@ -87,6 +87,21 @@ func (r *Resolver) Resolve(ctx context.Context, host string) (model.Tenant, erro
 	return tenant, nil
 }
 
+// MatchesHost reports whether the host is framed by the configured tenant
+// pattern, without querying the store: it answers "could this host name a
+// tenant", not "does that tenant exist". Callers that build public URLs from a
+// request host use it to refuse a forged Host header before it reaches a link.
+// In single-tenant mode every host matches, since none is used to route.
+func (r *Resolver) MatchesHost(host string) bool {
+	if !r.multiTenant {
+		return true
+	}
+
+	_, ok := r.slugFromHost(host)
+
+	return ok
+}
+
 // slugFromHost extracts the tenant slug framed by the configured pattern.
 func (r *Resolver) slugFromHost(host string) (string, bool) {
 	host = strings.ToLower(stripPort(host))

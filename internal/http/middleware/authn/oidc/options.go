@@ -4,10 +4,18 @@ import "github.com/xolo-gateway/xolo/internal/http/middleware/authn/oidc/compone
 
 type Provider = component.Provider
 
+// ProviderResolver returns the name the goth provider serving providerID is
+// registered under for a request whose public base URL is baseURL, registering
+// it if needed. It exists so a multi-tenant instance can give each tenant host
+// its own redirect URI; a single-tenant instance leaves it nil and keeps the
+// providers registered once at startup.
+type ProviderResolver func(providerID string, baseURL string) (string, error)
+
 type Options struct {
 	Providers        []component.Provider
 	ProvidersWithJWKS []ProviderWithJWKS
 	SessionName     string
+	ResolveProvider ProviderResolver
 }
 
 type OptionFunc func(opts *Options)
@@ -34,6 +42,14 @@ func WithProviders(providers ...Provider) OptionFunc {
 func WithSessionName(sessionName string) OptionFunc {
 	return func(opts *Options) {
 		opts.SessionName = sessionName
+	}
+}
+
+// WithProviderResolver binds providers to the host a request came in on. Leave
+// it unset to serve every request from the providers registered at startup.
+func WithProviderResolver(resolve ProviderResolver) OptionFunc {
+	return func(opts *Options) {
+		opts.ResolveProvider = resolve
 	}
 }
 
