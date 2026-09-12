@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
+	"time"
 
 	"github.com/markbates/goth"
 	"github.com/markbates/goth/gothic"
@@ -28,6 +31,8 @@ type OIDCDiscovery struct {
 	EndSessionEndpoint    string `json:"end_session_endpoint"`
 }
 
+const oidcDiscoveryTimeout = 10 * time.Second
+
 // oidcProviderFactory builds a goth provider bound to one callback URL. The
 // callback URL is the only part of a provider that varies between tenants, so
 // providers are described as factories rather than instantiated once: a
@@ -39,7 +44,11 @@ type oidcProviderFactory func(callbackURL string) (goth.Provider, error)
 // match, byte for byte, the route the handler mounts and the URI declared at
 // the identity provider.
 func oidcCallbackURL(baseURL string, providerID string) string {
-	return fmt.Sprintf("%s/auth/oidc/providers/%s/callback", baseURL, providerID)
+	return fmt.Sprintf(
+		"%s/auth/oidc/providers/%s/callback",
+		strings.TrimRight(baseURL, "/"),
+		providerID,
+	)
 }
 
 func getOIDCAuthnHandlerFromConfig(ctx context.Context, conf *config.Config) (*oidc.Handler, error) {
@@ -53,6 +62,7 @@ func getOIDCAuthnHandlerFromConfig(ctx context.Context, conf *config.Config) (*o
 	factories := make(map[string]oidcProviderFactory)
 	providers := make([]oidc.Provider, 0)
 	providersWithJWKS := make([]oidc.ProviderWithJWKS, 0)
+	discoveryClient := newOIDCDiscoveryHTTPClient()
 
 	if conf.HTTP.Authn.Providers.Google.Key != "" && conf.HTTP.Authn.Providers.Google.Secret != "" {
 		key := string(conf.HTTP.Authn.Providers.Google.Key)
@@ -126,7 +136,7 @@ func getOIDCAuthnHandlerFromConfig(ctx context.Context, conf *config.Config) (*o
 
 		discoveryURL := string(conf.HTTP.Authn.Providers.Gitea.DiscoveryURL)
 
-		discovery, err := fetchOIDCDiscovery(ctx, discoveryURL)
+		discovery, err := fetchOIDCDiscovery(ctx, discoveryClient, discoveryURL)
 		if err == nil && discovery != nil && discovery.JWKSURI != "" {
 			providersWithJWKS = append(providersWithJWKS, oidc.ProviderWithJWKS{
 				ID:               "gitea",
@@ -147,7 +157,7 @@ func getOIDCAuthnHandlerFromConfig(ctx context.Context, conf *config.Config) (*o
 			continue
 		}
 
-		factory, provider, withJWKS, err := buildOIDCProvider(ctx, np)
+		factory, provider, withJWKS, err := buildOIDCProvider(ctx, discoveryClient, np)
 		if err != nil {
 			return nil, errors.Wrapf(err, "could not configure oidc provider %q", np.ID)
 		}
@@ -164,31 +174,20 @@ func getOIDCAuthnHandlerFromConfig(ctx context.Context, conf *config.Config) (*o
 		oidc.WithProvidersWithJWKS(providersWithJWKS),
 	}
 
+	if err := buildStartupOIDCProviders(
+		factories,
+		conf.HTTP.BaseURL,
+		!conf.Multitenancy.Enabled,
+	); err != nil {
+		return nil, errors.WithStack(err)
+	}
+
 	if conf.Multitenancy.Enabled {
 		// Each tenant is served on its own hostname, so each needs its own
 		// redirect URI: a provider registered once at startup would send every
 		// tenant back to a single host, where its session — bound to both the
 		// hostname and the tenant — could not be used.
 		opts = append(opts, oidc.WithProviderResolver(newHostScopedProviders(factories).Resolve))
-	} else {
-		gothProviders := make([]goth.Provider, 0, len(factories))
-
-		for id, factory := range factories {
-			gothProvider, err := factory(oidcCallbackURL(conf.HTTP.BaseURL, id))
-			if err != nil {
-				return nil, errors.Wrapf(err, "could not configure oidc provider %q", id)
-			}
-
-			// Providers name themselves from their own type, and openidConnect
-			// mangles the given name on top of that ("openid-connect" becomes
-			// "openid-connect-oidc"). The callback URL and the login links use the
-			// ID verbatim, so force the name back to it.
-			gothProvider.SetName(id)
-
-			gothProviders = append(gothProviders, gothProvider)
-		}
-
-		goth.UseProviders(gothProviders...)
 	}
 
 	gothic.Store = sessionStore
@@ -218,55 +217,47 @@ func getRandomBytes(n int) ([]byte, error) {
 
 // buildOIDCProvider configures a single named OIDC provider: the factory
 // building its goth provider (for interactive login), its login-button
-// descriptor, and — when discovery succeeds — its JWKS/introspection/userinfo
-// descriptor used by the oidctoken and oauth2token authenticators. The provider
-// ID is reused as the goth name so it stays consistent across the
-// interactive-login and API-token paths.
-func buildOIDCProvider(ctx context.Context, np config.NamedOIDCProvider) (oidcProviderFactory, oidc.Provider, *oidc.ProviderWithJWKS, error) {
+// descriptor, and its JWKS/introspection/userinfo descriptor used by the
+// oidctoken and oauth2token authenticators. Discovery is mandatory and happens
+// once at startup. The provider ID is reused as the goth name so it stays
+// consistent across the interactive-login and API-token paths.
+func buildOIDCProvider(
+	ctx context.Context,
+	discoveryClient *http.Client,
+	np config.NamedOIDCProvider,
+) (oidcProviderFactory, oidc.Provider, *oidc.ProviderWithJWKS, error) {
 	discoveryURL := string(np.DiscoveryURL)
 	key := string(np.Key)
 	secret := string(np.Secret)
 
-	discovery, discoveryErr := fetchOIDCDiscovery(ctx, discoveryURL)
+	discovery, err := fetchOIDCDiscovery(ctx, discoveryClient, discoveryURL)
+	if err != nil {
+		return nil, oidc.Provider{}, nil, errors.WithStack(err)
+	}
+	if err := validateOIDCDiscovery(discovery); err != nil {
+		return nil, oidc.Provider{}, nil, errors.WithStack(err)
+	}
 
-	var factory oidcProviderFactory
-
-	if discoveryErr == nil && discovery != nil && discovery.AuthURL != "" && discovery.TokenURL != "" {
-		// The discovery document is read once, here, and reused by every provider
-		// instance built from this factory. A multi-tenant instance builds one per
-		// hostname it serves, and openidConnect.NewNamed would re-fetch the
-		// document each time — on the login path of a tenant seen for the first
-		// time.
-		factory = func(callbackURL string) (goth.Provider, error) {
-			provider, err := openidConnect.NewCustomisedURL(
-				key,
-				secret,
-				callbackURL,
-				discovery.AuthURL,
-				discovery.TokenURL,
-				discovery.Issuer,
-				discovery.UserInfoEndpoint,
-				discovery.EndSessionEndpoint,
-				np.Scopes...,
-			)
-			if err != nil {
-				return nil, errors.WithStack(err)
-			}
-
-			return provider, nil
+	// The discovery document is read and validated once, here, and its
+	// endpoints are reused by every tenant-scoped instance. No network request
+	// is therefore needed on the first login for a newly seen tenant.
+	factory := func(callbackURL string) (goth.Provider, error) {
+		provider, err := openidConnect.NewCustomisedURL(
+			key,
+			secret,
+			callbackURL,
+			discovery.AuthURL,
+			discovery.TokenURL,
+			discovery.Issuer,
+			discovery.UserInfoEndpoint,
+			discovery.EndSessionEndpoint,
+			np.Scopes...,
+		)
+		if err != nil {
+			return nil, errors.WithStack(err)
 		}
-	} else {
-		// Discovery could not be read here — let the provider try on its own, so a
-		// transient failure at this point still surfaces as the same startup error
-		// as before rather than silently disabling the provider.
-		factory = func(callbackURL string) (goth.Provider, error) {
-			provider, err := openidConnect.NewNamed(np.ID, key, secret, callbackURL, discoveryURL, np.Scopes...)
-			if err != nil {
-				return nil, errors.WithStack(err)
-			}
 
-			return provider, nil
-		}
+		return provider, nil
 	}
 
 	provider := oidc.Provider{
@@ -275,30 +266,38 @@ func buildOIDCProvider(ctx context.Context, np config.NamedOIDCProvider) (oidcPr
 		Icon:  np.Icon,
 	}
 
-	var withJWKS *oidc.ProviderWithJWKS
-	if discoveryErr == nil && discovery != nil && discovery.JWKSURI != "" {
-		withJWKS = &oidc.ProviderWithJWKS{
-			ID:               np.ID,
-			Label:            np.Label,
-			Icon:             np.Icon,
-			DiscoveryURL:     discoveryURL,
-			Issuer:           discovery.Issuer,
-			JWKSURL:          discovery.JWKSURI,
-			IntrospectionURL: discovery.IntrospectionEndpoint,
-			UserInfoURL:      discovery.UserInfoEndpoint,
-			ClientID:         key,
-			ClientSecret:     secret,
-			RequiredScope:    np.RequiredScope,
-			RequiredAudience: np.RequiredAudience,
-		}
+	withJWKS := &oidc.ProviderWithJWKS{
+		ID:               np.ID,
+		Label:            np.Label,
+		Icon:             np.Icon,
+		DiscoveryURL:     discoveryURL,
+		Issuer:           discovery.Issuer,
+		JWKSURL:          discovery.JWKSURI,
+		IntrospectionURL: discovery.IntrospectionEndpoint,
+		UserInfoURL:      discovery.UserInfoEndpoint,
+		ClientID:         key,
+		ClientSecret:     secret,
+		RequiredScope:    np.RequiredScope,
+		RequiredAudience: np.RequiredAudience,
 	}
 
 	return factory, provider, withJWKS, nil
 }
 
-func fetchOIDCDiscovery(ctx context.Context, discoveryURL string) (*OIDCDiscovery, error) {
+func newOIDCDiscoveryHTTPClient() *http.Client {
+	return &http.Client{Timeout: oidcDiscoveryTimeout}
+}
+
+func fetchOIDCDiscovery(
+	ctx context.Context,
+	client *http.Client,
+	discoveryURL string,
+) (*OIDCDiscovery, error) {
 	if discoveryURL == "" {
 		return nil, nil
+	}
+	if client == nil {
+		return nil, errors.New("oidc discovery http client is required")
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, discoveryURL, nil)
@@ -306,7 +305,7 @@ func fetchOIDCDiscovery(ctx context.Context, discoveryURL string) (*OIDCDiscover
 		return nil, errors.WithStack(err)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -322,4 +321,83 @@ func fetchOIDCDiscovery(ctx context.Context, discoveryURL string) (*OIDCDiscover
 	}
 
 	return &discovery, nil
+}
+
+func validateOIDCDiscovery(discovery *OIDCDiscovery) error {
+	if discovery == nil {
+		return errors.New("oidc discovery url is required")
+	}
+
+	endpoints := []struct {
+		name     string
+		value    string
+		required bool
+	}{
+		{name: "issuer", value: discovery.Issuer, required: true},
+		{name: "authorization_endpoint", value: discovery.AuthURL, required: true},
+		{name: "token_endpoint", value: discovery.TokenURL, required: true},
+		{name: "jwks_uri", value: discovery.JWKSURI, required: true},
+		{name: "userinfo_endpoint", value: discovery.UserInfoEndpoint},
+		{name: "introspection_endpoint", value: discovery.IntrospectionEndpoint},
+		{name: "end_session_endpoint", value: discovery.EndSessionEndpoint},
+	}
+
+	for _, endpoint := range endpoints {
+		if endpoint.value == "" {
+			if endpoint.required {
+				return errors.Errorf("oidc discovery document is missing %q", endpoint.name)
+			}
+
+			continue
+		}
+
+		parsed, err := url.Parse(endpoint.value)
+		if err != nil {
+			return errors.Wrapf(err, "oidc discovery field %q is not a valid url", endpoint.name)
+		}
+
+		isHTTP := parsed.Scheme == "http" || parsed.Scheme == "https"
+		if !isHTTP || parsed.Host == "" {
+			return errors.Errorf(
+				"oidc discovery field %q must be an absolute http(s) url",
+				endpoint.name,
+			)
+		}
+	}
+
+	return nil
+}
+
+// buildStartupOIDCProviders invokes every factory once during startup. In
+// single-tenant mode those exact instances are registered; in multi-tenant
+// mode they are discarded because each tenant needs an instance carrying its
+// own callback URL. The factories themselves do little that can fail: a
+// misconfigured named OIDC provider is caught earlier, by the mandatory
+// discovery in buildOIDCProvider. This call keeps any factory that could fail
+// from surfacing only on the first login of a tenant.
+func buildStartupOIDCProviders(
+	factories map[string]oidcProviderFactory,
+	baseURL string,
+	register bool,
+) error {
+	providers := make([]goth.Provider, 0, len(factories))
+
+	for id, factory := range factories {
+		provider, err := factory(oidcCallbackURL(baseURL, id))
+		if err != nil {
+			return errors.Wrapf(err, "could not configure oidc provider %q", id)
+		}
+
+		// Providers name themselves from their own type, and openidConnect
+		// mangles custom names. Callback URLs and routes use the ID verbatim, so
+		// force the name back to it.
+		provider.SetName(id)
+		providers = append(providers, provider)
+	}
+
+	if register {
+		goth.UseProviders(providers...)
+	}
+
+	return nil
 }

@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"net"
 	"net/http"
 	"net/url"
 
@@ -13,12 +14,15 @@ import (
 // instance-wide base URL would send each of them links, redirects and OAuth
 // callbacks pointing at another tenant's host.
 //
-// hostMatches guards the substitution: the Host header is client-controlled, so
-// a host the tenant pattern does not frame falls back to the configured value
-// rather than ending up in a generated URL. Such hosts are answered 404 by the
-// tenant middleware anyway — this only makes sure nothing is built from them in
-// the meantime.
-func newTenantBaseURLResolver(baseURL string, hostMatches func(host string) bool) (func(r *http.Request) string, error) {
+// canonicalHost guards and normalizes the substitution: the Host header is
+// client-controlled, so only the tenant slug is retained. The hostname is
+// rebuilt from the configured tenant pattern, while the port always comes from
+// baseURL. Such invalid hosts are answered 404 by the tenant middleware anyway
+// — this only makes sure nothing is built from them in the meantime.
+func newTenantBaseURLResolver(
+	baseURL string,
+	canonicalHost func(host string) (string, bool),
+) (func(r *http.Request) string, error) {
 	parsed, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, errors.Wrapf(err, "could not parse base url %q", baseURL)
@@ -29,12 +33,16 @@ func newTenantBaseURLResolver(baseURL string, hostMatches func(host string) bool
 	}
 
 	return func(r *http.Request) string {
-		if r.Host == "" || !hostMatches(r.Host) {
+		host, ok := canonicalHost(r.Host)
+		if !ok {
 			return baseURL
 		}
 
 		perHost := *parsed
-		perHost.Host = r.Host
+		perHost.Host = host
+		if port := parsed.Port(); port != "" {
+			perHost.Host = net.JoinHostPort(host, port)
+		}
 
 		return perHost.String()
 	}, nil

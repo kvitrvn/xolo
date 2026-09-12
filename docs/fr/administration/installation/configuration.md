@@ -45,6 +45,8 @@ XOLO_HTTP_AUTHN_OIDC_PROVIDER_KEYCLOAK_LABEL="Mon SSO"
 XOLO_HTTP_AUTHN_OIDC_PROVIDER_KEYCLOAK_SCOPES=openid,profile,email
 ```
 
+L'URL de découverte est obligatoire. Xolo télécharge le document au démarrage, avec un délai maximal de 10 secondes. Si le document est inaccessible ou incomplet, le serveur refuse de démarrer, en mode mono-tenant comme en multi-tenant. Le document doit contenir `issuer`, `authorization_endpoint`, `token_endpoint` et `jwks_uri`. Chacun de ces champs, ainsi que `userinfo_endpoint`, `introspection_endpoint` et `end_session_endpoint` quand ils sont présents, doit être une URL absolue en `http` ou `https`.
+
 Pour valider des jetons d'accès opaques côté API (introspection RFC 7662, ou UserInfo à défaut) plutôt que des ID Tokens OIDC autoportés, activez `XOLO_HTTP_AUTHN_OAUTH2TOKEN_ENABLED=true`.
 
 ## Stockage

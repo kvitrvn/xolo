@@ -3,6 +3,7 @@ package setup
 import (
 	"context"
 	"github.com/bornholm/genai/proxy"
+	"github.com/pkg/errors"
 	proxyAdapter "github.com/xolo-gateway/xolo/internal/adapter/proxy"
 	"github.com/xolo-gateway/xolo/internal/config"
 	"github.com/xolo-gateway/xolo/internal/core/model"
@@ -15,9 +16,8 @@ import (
 	"github.com/xolo-gateway/xolo/internal/http/middleware/authn"
 	"github.com/xolo-gateway/xolo/internal/http/middleware/authz"
 	membershipsMiddleware "github.com/xolo-gateway/xolo/internal/http/middleware/memberships"
-	"github.com/xolo-gateway/xolo/internal/http/middleware/tenant"
 	"github.com/xolo-gateway/xolo/internal/http/middleware/ratelimit"
-	"github.com/pkg/errors"
+	"github.com/xolo-gateway/xolo/internal/http/middleware/tenant"
 
 	gohttp "net/http"
 )
@@ -335,7 +335,7 @@ func NewHTTPServerFromConfig(ctx context.Context, conf *config.Config) (*http.Se
 	// each tenant is served on its own hostname, and every link, redirect and
 	// OAuth callback must stay on the host the request came in on.
 	if conf.Multitenancy.Enabled {
-		resolveBaseURL, err := newTenantBaseURLResolver(conf.HTTP.BaseURL, tenantResolver.MatchesHost)
+		resolveBaseURL, err := newTenantBaseURLResolver(conf.HTTP.BaseURL, tenantResolver.CanonicalHost)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}

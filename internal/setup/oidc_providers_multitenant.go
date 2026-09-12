@@ -36,7 +36,7 @@ func newHostScopedProviders(factories map[string]oidcProviderFactory) *hostScope
 func (p *hostScopedProviders) Resolve(providerID string, baseURL string) (string, error) {
 	factory, ok := p.factories[providerID]
 	if !ok {
-		return "", errors.Errorf("no oidc provider %q is configured", providerID)
+		return "", errors.Wrapf(oidc.ErrProviderNotFound, "no oidc provider %q is configured", providerID)
 	}
 
 	parsed, err := url.Parse(baseURL)
@@ -58,10 +58,9 @@ func (p *hostScopedProviders) Resolve(providerID string, baseURL string) (string
 		return name, nil
 	}
 
-	// Built outside the lock: a provider may have to read its identity provider's
-	// discovery document, and a slow one must not hold back the logins of every
-	// other tenant. Two requests racing on the same host both build one and the
-	// second instance is simply dropped below.
+	// Built outside the lock so constructing one host-scoped instance does not
+	// serialize the logins of every other tenant. Two requests racing on the
+	// same host both build one and the second instance is simply dropped below.
 	provider, err := factory(oidcCallbackURL(baseURL, providerID))
 	if err != nil {
 		return "", errors.Wrapf(err, "could not build oidc provider %q for host %q", providerID, parsed.Host)

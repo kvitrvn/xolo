@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -26,6 +27,9 @@ func (p *stubGothProvider) SetName(name string) {
 }
 
 func TestHostScopedProvidersResolve(t *testing.T) {
+	goth.ClearProviders()
+	t.Cleanup(goth.ClearProviders)
+
 	newRegistry := func(built *int) *hostScopedProviders {
 		return newHostScopedProviders(map[string]oidcProviderFactory{
 			"acme-idp": func(callbackURL string) (goth.Provider, error) {
@@ -126,6 +130,9 @@ func TestHostScopedProvidersResolve(t *testing.T) {
 
 			if !strings.Contains(err.Error(), testCase.wantErr) {
 				t.Errorf("error: got %q, want one containing %q", err, testCase.wantErr)
+			}
+			if testCase.providerID == "nope" && !errors.Is(err, oidc.ErrProviderNotFound) {
+				t.Errorf("error: got %v, want it to wrap ErrProviderNotFound", err)
 			}
 		})
 	}
