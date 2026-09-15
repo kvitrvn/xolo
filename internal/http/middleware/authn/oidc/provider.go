@@ -5,12 +5,12 @@ import (
 	"log/slog"
 	"net/http"
 
-	httpCtx "github.com/xolo-gateway/xolo/internal/http/context"
-	"github.com/xolo-gateway/xolo/internal/http/middleware/authn"
 	"github.com/bornholm/go-x/slogx"
 	"github.com/markbates/goth"
 	"github.com/markbates/goth/gothic"
 	"github.com/pkg/errors"
+	httpCtx "github.com/xolo-gateway/xolo/internal/http/context"
+	"github.com/xolo-gateway/xolo/internal/http/middleware/authn"
 )
 
 func (h *Handler) handleProvider(w http.ResponseWriter, r *http.Request) {
@@ -22,7 +22,7 @@ func (h *Handler) handleProvider(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleProviderCallback(w http.ResponseWriter, r *http.Request) {
-	gothUser, err := gothic.CompleteUserAuth(w, r)
+	gothUser, err := completeUserAuth(w, r)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "could not complete user auth", slog.Any("error", errors.WithStack(err)))
 		http.Redirect(w, r, "/auth/oidc/logout", http.StatusTemporaryRedirect)
