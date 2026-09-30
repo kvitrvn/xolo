@@ -295,7 +295,7 @@ func (h *Handler) deleteMiddleware(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := secretcleanup.PruneRemovedNodes(ctx, h.secretStore, mw.Graph(), nil); err != nil {
+	if err := secretcleanup.PruneRemovedNodes(ctx, h.secretStore, string(mw.OrgID()), mw.Graph(), nil); err != nil {
 		slog.ErrorContext(ctx, "could not prune secrets for deleted middleware", slog.Any("error", err))
 	}
 

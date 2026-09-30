@@ -382,6 +382,13 @@ func createGetDatabase(db *gorm.DB) func(ctx context.Context) (*gorm.DB, error) 
 						return errors.New("legacy invitation revocation cannot be rolled back; recreate links")
 					},
 				},
+				{
+					ID:      "202609300003",
+					Migrate: migratePluginSecretScope,
+					Rollback: func(tx *gorm.DB) error {
+						return errors.New("plugin secret scope migration cannot be rolled back; legacy uniqueness may no longer hold")
+					},
+				},
 			})
 
 			m.InitSchema(func(tx *gorm.DB) error {
@@ -432,7 +439,10 @@ func createGetDatabase(db *gorm.DB) func(ctx context.Context) (*gorm.DB, error) 
 					if _, err := ensureDefaultTenant(tx); err != nil {
 						return errors.WithStack(err)
 					}
-					return migrateUniqueMemberships(tx)
+					if err := migrateUniqueMemberships(tx); err != nil {
+						return err
+					}
+					return migratePluginSecretScope(tx)
 				})
 			})
 

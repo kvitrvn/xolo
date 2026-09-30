@@ -309,7 +309,7 @@ func (h *Handler) deleteVirtualModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := secretcleanup.PruneRemovedNodes(ctx, h.secretStore, vm.Graph(), nil); err != nil {
+	if err := secretcleanup.PruneRemovedNodes(ctx, h.secretStore, string(vm.OrgID()), vm.Graph(), nil); err != nil {
 		slog.ErrorContext(ctx, "could not prune secrets for deleted virtual model", slog.Any("error", err))
 	}
 
