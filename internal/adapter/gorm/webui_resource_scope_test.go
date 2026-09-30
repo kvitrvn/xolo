@@ -15,6 +15,7 @@ import (
 	xologorm "github.com/xolo-gateway/xolo/internal/adapter/gorm"
 	"github.com/xolo-gateway/xolo/internal/core/model"
 	"github.com/xolo-gateway/xolo/internal/core/port"
+	"github.com/xolo-gateway/xolo/internal/core/service"
 	"github.com/xolo-gateway/xolo/internal/crypto"
 	httpCtx "github.com/xolo-gateway/xolo/internal/http/context"
 	"github.com/xolo-gateway/xolo/internal/http/handler/webui"
@@ -176,7 +177,7 @@ func TestWebUIResourceIsolation(t *testing.T) {
 		handler := memberships.Middleware(store, store)(webui.NewHandler(
 			nil, store, store, store, events.NewProviderStore(store, observer),
 			events.NewVirtualModelStore(store, observer), events.NewMiddlewareStore(store, observer), store,
-			store, events.NewInviteStore(store, observer), store, observer, nil, nil, store, scopeTestSecretKey,
+			store, events.NewInviteStore(store, observer), service.NewInvitationService(events.NewInvitationTransaction(store, observer)), store, observer, nil, nil, store, scopeTestSecretKey,
 			nil, nil, nil, store, store, store, store, 100, 100,
 		))
 		operations := []struct {

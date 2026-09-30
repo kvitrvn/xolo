@@ -368,6 +368,20 @@ func createGetDatabase(db *gorm.DB) func(ctx context.Context) (*gorm.DB, error) 
 						return errors.WithStack(tx.Exec("DELETE FROM " + quotaUsageTable + " WHERE scope = 'application'").Error)
 					},
 				},
+				{
+					ID:      "202609300001",
+					Migrate: migrateUniqueMemberships,
+					Rollback: func(tx *gorm.DB) error {
+						return tx.Exec("DROP INDEX IF EXISTS idx_memberships_user_org").Error
+					},
+				},
+				{
+					ID:      "202609300002",
+					Migrate: migrateRevokeLegacyInvitations,
+					Rollback: func(tx *gorm.DB) error {
+						return errors.New("legacy invitation revocation cannot be rolled back; recreate links")
+					},
+				},
 			})
 
 			m.InitSchema(func(tx *gorm.DB) error {
@@ -418,8 +432,7 @@ func createGetDatabase(db *gorm.DB) func(ctx context.Context) (*gorm.DB, error) 
 					if _, err := ensureDefaultTenant(tx); err != nil {
 						return errors.WithStack(err)
 					}
-
-					return nil
+					return migrateUniqueMemberships(tx)
 				})
 			})
 

@@ -26,6 +26,7 @@ type Handler struct {
 	middlewareStore     port.MiddlewareStore
 	usageStore          port.UsageStore
 	inviteStore         port.InviteStore
+	invitationService   *service.InvitationService
 	userStore           port.UserStore
 	applicationStore    port.ApplicationStore
 	quotaStore          port.QuotaStore
@@ -55,6 +56,7 @@ func NewHandler(
 	middlewareStore port.MiddlewareStore,
 	usageStore port.UsageStore,
 	inviteStore port.InviteStore,
+	invitationService *service.InvitationService,
 	userStore port.UserStore,
 	applicationStore port.ApplicationStore,
 	exchangeRateService *service.ExchangeRateService,
@@ -79,6 +81,7 @@ func NewHandler(
 		middlewareStore:     middlewareStore,
 		usageStore:          usageStore,
 		inviteStore:         inviteStore,
+		invitationService:   invitationService,
 		userStore:           userStore,
 		applicationStore:    applicationStore,
 		quotaStore:          quotaStore,
