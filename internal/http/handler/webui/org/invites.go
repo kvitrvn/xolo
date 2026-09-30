@@ -8,12 +8,12 @@ import (
 
 	"github.com/a-h/templ"
 	"github.com/bornholm/go-x/slogx"
+	"github.com/pkg/errors"
 	"github.com/xolo-gateway/xolo/internal/core/model"
 	"github.com/xolo-gateway/xolo/internal/core/port"
 	httpCtx "github.com/xolo-gateway/xolo/internal/http/context"
 	common "github.com/xolo-gateway/xolo/internal/http/handler/webui/common/component"
 	"github.com/xolo-gateway/xolo/internal/http/handler/webui/org/component"
-	"github.com/pkg/errors"
 )
 
 func (h *Handler) getInvitesPage(w http.ResponseWriter, r *http.Request) {
@@ -175,6 +175,11 @@ func (h *Handler) deleteInvite(w http.ResponseWriter, r *http.Request) {
 	orgSlug := r.PathValue("orgSlug")
 	inviteID := r.PathValue("inviteID")
 
+	if _, _, err := h.resolveOrgAndInvite(ctx, orgSlug, inviteID); err != nil {
+		writeResourceLookupError(ctx, w, err)
+		return
+	}
+
 	if err := h.inviteStore.DeleteInvite(ctx, model.InviteTokenID(inviteID)); err != nil {
 		if errors.Is(err, port.ErrNotFound) {
 			http.Error(w, "Invite not found", http.StatusNotFound)
@@ -192,6 +197,11 @@ func (h *Handler) revokeInvite(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	orgSlug := r.PathValue("orgSlug")
 	inviteID := r.PathValue("inviteID")
+
+	if _, _, err := h.resolveOrgAndInvite(ctx, orgSlug, inviteID); err != nil {
+		writeResourceLookupError(ctx, w, err)
+		return
+	}
 
 	if err := h.inviteStore.RevokeInvite(ctx, model.InviteTokenID(inviteID)); err != nil {
 		if errors.Is(err, port.ErrNotFound) {
