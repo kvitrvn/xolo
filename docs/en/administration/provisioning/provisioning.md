@@ -5,7 +5,7 @@ five complete PUT operations, unit reads, lists and the event feed. It shares tr
 server but has its own TLS configuration. The public OpenAI-compatible `/v1/`
 proxy is unaffected.
 
-Lots 1–3 are implemented. Webhooks remain pending in lot 4. The manifest
+Lots 1–4 are implemented, including optional durable webhooks. The manifest
 identifies the targeted contract; it is not a claim of complete conformance.
 
 ## Configuration and authority
@@ -231,3 +231,140 @@ client certificate without exactly one authorized URI SAN and configure
 Tests use ephemeral CAs and real TLS handshakes. Database tests exercise SQLite
 and PostgreSQL. App Covenant tooling remains external; no conformance runner
 or permanent CI workflow is installed in Xolo.
+
+## Durable webhooks (Xolo extension)
+
+Webhooks are optional hints; consumers must still poll `/v1/events` on startup,
+reconnection and periodically. They never advance the consumer's feed checkpoint.
+Delivery is at least once. A receiver must authenticate before JSON decoding,
+accept timestamps within 300 seconds in either direction, deduplicate
+`(source, id)` durably and acknowledge durable acceptance with 2xx.
+
+Enable `XOLO_WEBHOOKS_ENABLED=true` to run the worker independently of the
+provisioning listener. Configuration is optional for existing installations;
+the database migration `202610020003` runs automatically either way. No manual
+migration command is needed. Manage subscriptions through the mTLS listener
+when both features are enabled. The minimal `/v1/manifest` is unchanged;
+`GET /v1/xolo/extensions` separately announces the webhook extension.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `XOLO_WEBHOOKS_ENABLED` | `false` | Run materialization, delivery and cleanup |
+| `XOLO_WEBHOOKS_ALLOWED_ORIGINS` | required when enabled | Comma-separated exact HTTPS origins, including nondefault ports |
+| `XOLO_WEBHOOKS_ALLOW_PRIVATE_NETWORKS` | `false` | Permit private and loopback addresses for allowlisted origins |
+| `XOLO_WEBHOOKS_TLS_CA_FILE` | empty | Additional CA PEM; system roots remain trusted |
+| `XOLO_WEBHOOKS_WORKERS` | `2` | Concurrent deliveries per process, 1–16 |
+| `XOLO_WEBHOOKS_POLL_INTERVAL` | `1s` | Poll interval, 100 ms–1 minute |
+| `XOLO_WEBHOOKS_QUEUE_CAPACITY` | `10000` | Maximum retained delivery rows, 1–1,000,000 |
+
+Origins have no path, query, fragment or credentials. Destinations may add a
+path, but no query, fragment or credentials. There are no wildcard origins.
+Every DNS answer is checked at connect time and the checked IP is dialed
+directly. Environment HTTP proxies are ignored. Link-local, multicast,
+unspecified, shared and special-use networks remain denied, including cloud
+metadata addresses, even with private access enabled. TLS certificates are
+always verified; the private-network switch does not disable TLS verification.
+Outbound firewall restrictions should also apply to the Xolo process.
+
+Subscriptions have client-generated UUID keys under a tenant. Their ownership
+is currently `instance`; ownership transfer belongs to the adoption lot.
+Tenant suspension does not disable control-plane notifications. The tenant
+must exist before credentials are accessed; an ID cannot move between tenants.
+At most 100 subscriptions exist per instance.
+
+| Method and route | Behavior |
+| --- | --- |
+| `GET /v1/xolo/tenants/{tenantID}/webhooks` | List subscriptions without secrets |
+| `GET /v1/xolo/tenants/{tenantID}/webhooks/{id}` | Settings, position, state and secret count |
+| `PUT /v1/xolo/tenants/{tenantID}/webhooks/{id}` | Create or replace settings, response 200 |
+| `DELETE /v1/xolo/tenants/{tenantID}/webhooks/{id}` | Delete subscription, credentials and all queued/retained deliveries, response 204 |
+| `GET /v1/xolo/tenants/{tenantID}/webhooks/{id}/deliveries` | Latest 100 delivery diagnostics, without payloads or credentials |
+| `POST /v1/xolo/tenants/{tenantID}/webhooks/{id}/reset` | Acknowledge loss, discard queue and restart from current safe horizon |
+| `GET /v1/xolo/webhooks/status` | Instance queue counts, lag and history-loss status |
+
+PUT requires `destination`, `events` and boolean `enabled`; `events` is either
+`["*"]` or a nonempty list of exact common event types. `secrets` is required
+at creation and contains one or two distinct base64 secrets, optionally
+prefixed `whsec_`, each decoding to 32–64 bytes. Generate secrets outside Xolo.
+Omitting `secrets` on update preserves the current keys. Keys are write-only,
+AES-GCM encrypted using `XOLO_SECRET_KEY`, and bound inside the encrypted value
+to the tenant and subscription IDs. Back up that key with the database.
+
+For rotation, PUT `[old, new]`, configure the receiver to trust either, then
+PUT `[new]` after receiver cutover. The response exposes only `secret_count`.
+Every attempt loads current subscription settings: rotation and destination
+changes apply to pending deliveries as well. Event-filter changes apply only
+to events not yet materialized; queued events retain their original selection. `enabled=false` pauses new
+materialization and claims without advancing the position or discarding work.
+An already reserved request may still complete after disable, reset or delete;
+its HTTP call is bounded and a stale result cannot overwrite a new reservation.
+
+New subscriptions start at the current safe horizon, not the start of history.
+Reconstruct state before relying on notifications. Materialization reads the
+safe feed under its allocation lock, then atomically inserts delivery rows and
+advances the subscription position. The unique subscription/event pair prevents
+duplicate queue entries. Each materialization transaction reads at most 100
+publications across all subscriptions, prioritizing the oldest positions to
+bound lock duration and avoid starvation. Reservations last 30 seconds and use fresh fencing
+tokens. HTTP runs outside all database transactions; a crash after receiver
+acceptance but before result recording may repeat the same event and ID.
+
+The exact stored CloudEvent bytes are sent as HTTPS POST with
+`Content-Type: application/cloudevents+json`. `webhook-id` is the event UUID;
+`webhook-timestamp` is Unix seconds for this attempt. HMAC-SHA256 covers
+`id.timestamp.body` using decoded secret bytes. `webhook-signature` contains
+`v1,<base64>` for each active key, separated by spaces. Retries preserve body
+and ID and refresh timestamp/signatures. No actor, email or extra attributes
+are added to the common event.
+
+The client allows 3 seconds for DNS/connect, 5 seconds for TLS and response
+headers, and 10 seconds total including response reading. It refuses redirects,
+limits response headers to 16 KiB and body to 64 KiB, and follows context
+cancellation. Only a completely read, bounded 2xx response succeeds. Diagnostics
+use fixed codes such as `transport_error`, `redirect`, `http_status`,
+`response_too_large` and `credentials_unavailable`; response bodies, signatures,
+secrets and detailed transport errors are never included.
+
+Failures retry after 5, 10, 20, 40… seconds, capped at one hour, with at most
+12 reservations or 24 hours from materialization. Expired reservations count
+as attempts. Exhausted jobs become `failed`; inspect their diagnostics and
+reconcile using the feed. There is no exactly-once or automatic terminal replay
+claim. Successful and failed rows, including their independent payload copies,
+are retained for seven days after completion and cleaned while the worker runs.
+A pending payload survives event-feed purge. Feed retention remains unlimited
+by default; setting a separate feed purge policy is an operator decision.
+
+Queue capacity counts pending, leased **and retained terminal** rows. When full,
+materialization pauses with `backpressure`, preserving its last position;
+resource writes continue. Budget for capacity times payload/row/index overhead,
+plus the independently retained feed and audit. The default 10,000 rows normally
+represents tens of MiB rather than a byte-level disk quota; measure actual
+storage and monitor free space. Lowering capacity never drops existing jobs.
+
+If a paused position falls behind the feed retention floor, the subscription
+enters `history_lost`; it never silently advances to retained history. Already
+materialized deliveries can still complete. Rebuild the consumer using a fresh
+C0 and the full generation algorithm, then explicitly reset with
+`{"acknowledge_loss":true}` and continue polling from the consumer's own
+checkpoint. A reset discards all subscription delivery rows and starts new
+notifications at the current horizon. Tenant deletion also removes its
+subscriptions and materialized deliveries in the same transaction. Organization
+and member lifecycle reconciliation remains outside the common no-deletion
+profile; future scoped cleanup can use each delivery's tenant/subscription key.
+
+Operational targets at default settings are materialization and first attempt
+within a few seconds when healthy, without a throughput or latency SLA.
+`xolo_webhook_attempts_total` and `xolo_webhook_failures_total{reason}` are
+process counters. `xolo_webhook_queue{state}`, `xolo_webhook_lag_seconds{stage}`
+and `xolo_webhook_history_lost` are database-wide gauges sampled by each process;
+use max rather than sum across replicas. Labels never contain tenant, endpoint
+or event identifiers. Alert on sustained lag, failures, capacity saturation or
+any history loss. Common publication itself is synchronous with commit; the
+materialization lag measures committed events not yet queued.
+
+Shutdown cancels HTTP and waits for all workers. Result recording receives at
+most five additional seconds; a crash or unavailable database leaves a lease
+that another worker can recover. Allow at least 15 seconds for process shutdown.
+Console unavailability causes retries, not a server shutdown. Disabling the
+worker preserves subscriptions and pending work, including when the provisioning
+listener is disabled; cleanup resumes when the worker is enabled again.

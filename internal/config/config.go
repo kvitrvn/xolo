@@ -11,6 +11,7 @@ import (
 )
 
 type Config struct {
+	Webhooks         Webhooks           `envPrefix:"WEBHOOKS_"`
 	Logger           Logger             `envPrefix:"LOGGER_"`
 	HTTP             HTTP               `envPrefix:"HTTP_"`
 	Storage          Storage            `envPrefix:"STORAGE_"`
@@ -128,6 +129,9 @@ func (c *Config) Validate() error {
 		return errors.WithStack(err)
 	}
 
+	if err := c.Webhooks.Validate(); err != nil {
+		return err
+	}
 	if err := c.ProvisionningAPI.Validate(); err != nil {
 		return errors.WithStack(err)
 	}

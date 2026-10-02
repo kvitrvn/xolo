@@ -40,11 +40,19 @@ func NewProvisionningAPIServerFromConfig(ctx context.Context, conf *config.Confi
 		return nil, errors.Wrap(err, "could not load provisionning api tls configuration")
 	}
 
+	handler := v1.NewHandler(provisioning, build.ShortVersion)
+	worker, err := NewWebhookWorkerFromConfig(ctx, conf)
+	if err != nil {
+		return nil, err
+	}
+	if worker != nil {
+		handler.WithWebhooks(worker.WebhookService)
+	}
 	return provisionning.NewServer(
 		provisionning.WithAddress(conf.ProvisionningAPI.Address),
 		provisionning.WithClientPolicy(conf.ProvisionningAPI.AuthorizedURIs, conf.ProvisionningAPI.RateLimit, conf.ProvisionningAPI.RateBurst),
 		provisionning.WithTLSConfig(tlsConfig),
-		provisionning.WithHandler(v1.NewHandler(provisioning, build.ShortVersion)),
+		provisionning.WithHandler(handler),
 		provisionning.WithShutdownTimeout(conf.ProvisionningAPI.ShutdownTimeout),
 	), nil
 }

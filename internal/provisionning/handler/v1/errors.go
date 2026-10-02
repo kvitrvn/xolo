@@ -75,6 +75,8 @@ func writeServiceError(ctx context.Context, w http.ResponseWriter, err error, fa
 // statusFromError maps the domain sentinels to their HTTP status.
 func statusFromError(err error) (int, string) {
 	switch {
+	case errors.Is(err, port.ErrWebhookCapacity):
+		return 409, "webhook_capacity"
 	case errors.Is(err, port.ErrInvalidCursor):
 		return 400, "invalid_cursor"
 	case errors.Is(err, port.ErrCursorExpired):

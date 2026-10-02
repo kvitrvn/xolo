@@ -3,8 +3,8 @@
 L'API utilise un listener HTTPS dédié, distinct du proxy public `/v1/`.
 Elle expose le manifeste et les cinq PUT du contrat App Covenant
 `0.1.0-draft.1`, ainsi que les lectures communes, ETags, préconditions, listes
-et flux de synchronisation des lots 1 à 3. Les webhooks restent prévus au
-lot 4 ; cette version ne revendique pas une conformité complète au contrat.
+et flux de synchronisation des lots 1 à 3. Le lot 4 ajoute les webhooks durables
+facultatifs ; cette version ne revendique pas une conformité complète au contrat.
 
 ## Configuration et certificats
 
@@ -227,3 +227,143 @@ revendiquée.
 Les suppressions physiques des extensions Xolo restent hors du profil commun
 sans suppression. Un 404 consécutif ne constitue pas un tombstone implicite ;
 le protocole de cycle de vie relève d'un lot ultérieur.
+
+## Webhooks durables — extension Xolo
+
+Les webhooks restent des notifications facultatives. Le consommateur interroge
+`/v1/events` au démarrage, à la reconnexion et périodiquement ; une notification
+ne fait jamais avancer son checkpoint du flux. La livraison est au moins une
+fois. Le destinataire vérifie la signature avant de décoder le JSON, accepte
+un écart d’horloge maximal de 300 secondes dans les deux sens, déduplique
+`(source, id)` durablement et accuse l’acceptation durable avec un statut 2xx.
+
+La migration `202610020003` est automatique au démarrage. Une installation
+existante n’a aucune commande de migration à exécuter. Les webhooks restent
+désactivés par défaut ; leur activation demande une destination explicitement
+autorisée et un abonnement. Le worker fonctionne indépendamment du listener
+provisioning. Le CRUD utilise ce listener mTLS lorsque les deux fonctions sont
+activées. `GET /v1/xolo/extensions` annonce séparément l’extension ; le manifeste
+commun reste inchangé.
+
+| Variable | Défaut | Description |
+| --- | --- | --- |
+| `XOLO_WEBHOOKS_ENABLED` | `false` | Active matérialisation, livraison et nettoyage |
+| `XOLO_WEBHOOKS_ALLOWED_ORIGINS` | obligatoire si activé | Origines HTTPS exactes séparées par des virgules, avec port non standard éventuel |
+| `XOLO_WEBHOOKS_ALLOW_PRIVATE_NETWORKS` | `false` | Autorise les adresses privées et loopback des origines permises |
+| `XOLO_WEBHOOKS_TLS_CA_FILE` | vide | CA PEM supplémentaire, en complément des racines système |
+| `XOLO_WEBHOOKS_WORKERS` | `2` | Livraisons simultanées par processus, entre 1 et 16 |
+| `XOLO_WEBHOOKS_POLL_INTERVAL` | `1s` | Intervalle de polling, entre 100 ms et 1 minute |
+| `XOLO_WEBHOOKS_QUEUE_CAPACITY` | `10000` | Lignes de livraison conservées, entre 1 et 1 000 000 |
+
+Les origines n’acceptent ni joker, chemin, credentials, query string ou fragment.
+Une destination peut ajouter un chemin, mais pas de query string, fragment ou
+credentials. Chaque réponse DNS est vérifiée à la connexion ; l’adresse IP
+contrôlée est ensuite utilisée directement. Les proxies HTTP de l’environnement
+sont ignorés. Les adresses link-local, multicast, non spécifiées, partagées ou
+réservées restent interdites, notamment celles des métadonnées cloud, même
+avec l’option réseau privé. Les certificats TLS sont toujours vérifiés.
+Les restrictions réseau sortantes du déploiement doivent aussi couvrir Xolo.
+
+Chaque abonnement possède un UUID fourni par le client et appartient à un
+tenant. La propriété est `instance` ; son transfert relève du lot d’adoption.
+La suspension du tenant ne suspend pas les notifications de contrôle. Le
+parent est résolu avant lecture des credentials. L’UUID ne peut pas être
+réaffecté à un autre tenant. La limite est de 100 abonnements par instance.
+
+| Méthode et route | Comportement |
+| --- | --- |
+| `GET /v1/xolo/tenants/{tenantID}/webhooks` | Liste sans secrets |
+| `GET /v1/xolo/tenants/{tenantID}/webhooks/{id}` | Paramètres, position, état et nombre de clés |
+| `PUT /v1/xolo/tenants/{tenantID}/webhooks/{id}` | Création ou remplacement des paramètres, statut 200 |
+| `DELETE /v1/xolo/tenants/{tenantID}/webhooks/{id}` | Suppression de l’abonnement, credentials et toutes ses livraisons, statut 204 |
+| `GET /v1/xolo/tenants/{tenantID}/webhooks/{id}/deliveries` | Les 100 derniers diagnostics, sans payload ni credentials |
+| `POST /v1/xolo/tenants/{tenantID}/webhooks/{id}/reset` | Reconnaît la perte, vide la file et repart de l’horizon courant |
+| `GET /v1/xolo/webhooks/status` | Compteurs de file, retards et pertes d’historique |
+
+PUT exige `destination`, `events` et le booléen `enabled`. `events` contient
+`["*"]` ou une liste non vide de types exacts du flux commun. `secrets` est
+obligatoire à la création : une ou deux clés distinctes en base64, éventuellement
+préfixées `whsec_`, décodant chacune 32 à 64 octets. Générer les clés hors de Xolo.
+Omettre `secrets` lors d’une mise à jour conserve les clés actuelles. Elles sont
+en écriture seule, chiffrées en AES-GCM avec `XOLO_SECRET_KEY` et liées dans le
+contenu chiffré au tenant et à l’abonnement. Sauvegarder cette clé avec la base.
+
+Pour une rotation, envoyer `[ancienne, nouvelle]`, faire accepter les deux au
+destinataire, puis envoyer `[nouvelle]` après sa bascule. La réponse n’expose
+que `secret_count`. Chaque tentative utilise les paramètres actuels : rotation
+et changement de destination s’appliquent aussi aux livraisons en attente. Un
+changement de filtre ne concerne que les événements non encore matérialisés.
+`enabled=false` arrête les nouvelles matérialisations et réservations sans
+avancer la position ni supprimer le travail. Une requête déjà réservée peut
+encore terminer après désactivation, reset ou suppression ; son appel est
+borné et un ancien résultat ne peut pas écraser une réservation plus récente.
+
+Un nouvel abonnement part de l’horizon sûr courant, sans rejouer l’historique.
+La matérialisation lit le flux sous son verrou d’allocation, puis insère les
+livraisons et avance la position dans la même transaction. La paire unique
+abonnement/événement évite les doublons de file. Chaque transaction lit au plus
+100 publications, tous abonnements confondus, en priorisant les positions les
+plus anciennes pour borner le verrou et éviter la famine. Les réservations expirent après
+30 secondes et portent un jeton de réservation renouvelé. L’appel HTTP est hors
+transaction. Un crash après acceptation mais avant enregistrement peut donc
+redélivrer le même événement avec le même ID.
+
+Le POST HTTPS envoie les octets exacts du CloudEvent conservé avec
+`application/cloudevents+json`. `webhook-id` contient son UUID et
+`webhook-timestamp` les secondes Unix de la tentative. HMAC-SHA256 signe
+`id.timestamp.body` avec les octets de la clé décodée ; `webhook-signature`
+contient une signature `v1,<base64>` par clé active, séparées par des espaces.
+Une reprise conserve ID et corps, renouvelle timestamp et signatures, sans
+ajouter d’acteur, e-mail ou attribut au profil commun.
+
+Le client borne DNS/connexion à 3 secondes, TLS et en-têtes à 5 secondes, et
+l’ensemble de l’appel à 10 secondes, lecture comprise. Il refuse les
+redirections, limite les en-têtes à 16 Kio et le corps de réponse à 64 Kio,
+et respecte l’annulation. Seule une réponse 2xx entièrement lue et bornée
+réussit. Les diagnostics sont des codes fixes (`transport_error`, `redirect`,
+`http_status`, `response_too_large`, `credentials_unavailable`…), sans corps
+de réponse, signature, secret ou détail d’erreur réseau.
+
+Les reprises attendent 5, 10, 20, 40… secondes, avec plafond d’une heure et
+limite de 12 réservations ou 24 heures depuis la matérialisation. Une réservation
+expirée compte comme tentative. Après épuisement, la livraison devient `failed` :
+examiner le diagnostic et réconcilier par le flux. Les succès et échecs terminaux,
+avec leurs copies indépendantes des payloads, restent sept jours après leur
+fin, puis sont nettoyés lorsque le worker fonctionne. Un payload matérialisé
+survit à la purge du flux. La rétention de celui-ci reste illimitée par défaut.
+
+La capacité compte **toutes** les lignes, y compris les succès et échecs conservés.
+Une file pleine suspend la matérialisation avec l’état `backpressure`, sans
+perdre sa position ni bloquer les écritures de ressources. Prévoir le produit
+capacité × taille des payloads/lignes/index, plus le flux et l’audit indépendants.
+10 000 lignes représentent habituellement des dizaines de Mio, sans constituer
+un quota disque en octets : mesurer la base et surveiller l’espace libre.
+Diminuer la capacité ne supprime aucune livraison existante.
+
+Une position située avant la borne de rétention passe à `history_lost` sans
+avance implicite. Les payloads déjà matérialisés peuvent encore être livrés.
+Reconstruire le consommateur depuis un nouveau C0, puis effectuer un reset
+explicite avec `{"acknowledge_loss":true}` ; continuer le polling depuis le
+checkpoint propre au consommateur. Le reset efface toutes les livraisons de
+l’abonnement et repart de l’horizon courant. La suppression d’un tenant retire
+aussi ses abonnements et livraisons dans la même transaction. Le cycle de vie
+des organisations et membres reste hors du profil commun sans suppression ;
+les clés tenant/abonnement préparent le nettoyage par périmètre des lots suivants.
+
+À configuration par défaut, l’objectif est une première tentative en quelques
+secondes lorsque le système est sain, sans SLA de débit ou de latence.
+`xolo_webhook_attempts_total` et `xolo_webhook_failures_total{reason}` sont des
+compteurs par processus. `xolo_webhook_queue{state}`,
+`xolo_webhook_lag_seconds{stage}` et `xolo_webhook_history_lost` sont des jauges
+pour toute la base : utiliser le maximum entre réplicas, pas la somme.
+Les labels ne contiennent aucun tenant, URI ou ID d’événement. Alerter sur
+retard durable, échecs, saturation ou perte d’historique. La publication commune
+est synchrone avec le commit ; le retard de matérialisation mesure les événements
+validés qui ne sont pas encore mis en file.
+
+L’arrêt annule les appels HTTP et attend les workers. L’enregistrement du
+résultat dispose de cinq secondes supplémentaires ; en cas de crash ou de base
+indisponible, la réservation devient récupérable à expiration. Prévoir au moins
+15 secondes de grâce pour le processus. Une console inaccessible provoque des
+reprises, sans arrêt du serveur. Désactiver le worker conserve les abonnements
+et le travail ; le nettoyage reprend à sa réactivation.

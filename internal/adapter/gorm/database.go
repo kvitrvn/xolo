@@ -392,6 +392,7 @@ func createGetDatabase(db *gorm.DB) func(ctx context.Context) (*gorm.DB, error) 
 					},
 					{ID: commonMigrationID, Migrate: migrateCommonSchema},
 					{ID: "202610020002", Migrate: migrateCommonReads},
+					{ID: "202610020003", Migrate: migrateWebhooks},
 				})
 
 				m.InitSchema(func(tx *gorm.DB) error {
@@ -451,7 +452,10 @@ func createGetDatabase(db *gorm.DB) func(ctx context.Context) (*gorm.DB, error) 
 						if err := installCommonSchema(tx); err != nil {
 							return err
 						}
-						return migrateCommonReads(tx)
+						if err := migrateCommonReads(tx); err != nil {
+							return err
+						}
+						return migrateWebhooks(tx)
 					})
 				})
 

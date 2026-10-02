@@ -165,6 +165,16 @@ func (s *Store) DeleteTenant(ctx context.Context, id model.TenantID) error {
 		if err := bound.trackDependents(ctx, "tenant", string(id)); err != nil {
 			return err
 		}
+		db, err := bound.getDatabase(ctx)
+		if err != nil {
+			return err
+		}
+		if err := db.Where("tenant_id = ?", string(id)).Delete(&WebhookDelivery{}).Error; err != nil {
+			return err
+		}
+		if err := db.Where("tenant_id = ?", string(id)).Delete(&WebhookSubscription{}).Error; err != nil {
+			return err
+		}
 		return bound.deleteTenant(ctx, id)
 	})
 }
