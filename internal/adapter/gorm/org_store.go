@@ -130,10 +130,14 @@ func (s *Store) saveOrg(ctx context.Context, org model.Organization) error {
 			return port.ErrAlreadyExists
 		}
 
-		return errors.WithStack(db.Clauses(clause.OnConflict{
+		err = db.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "id"}},
 			UpdateAll: true,
-		}).Create(fromOrganization(org)).Error)
+		}).Create(fromOrganization(org)).Error
+		if isUniqueViolation(err, "organizations", "slug") {
+			return port.ErrAlreadyExists
+		}
+		return errors.WithStack(err)
 	})
 }
 

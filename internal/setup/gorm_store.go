@@ -26,5 +26,12 @@ var getGormStoreFromConfig = createFromConfigOnce(func(ctx context.Context, conf
 			return nil, errors.Wrap(err, "reserve shared application hostname")
 		}
 	}
+	pattern := ""
+	if conf.Multitenancy.Enabled {
+		pattern = conf.Multitenancy.HostPattern
+	}
+	if err := store.InitializeDomainRouting(ctx, pattern, conf.Multitenancy.DefaultTenantSlug); err != nil {
+		return nil, errors.Wrap(err, "initialize explicit tenant domains")
+	}
 	return store, nil
 })

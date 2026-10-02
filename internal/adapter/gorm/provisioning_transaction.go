@@ -291,7 +291,7 @@ func checkOwnerTransition(db *gorm.DB, key mutationKey, before, after []byte) er
 		return nil
 	}
 	if count == 0 {
-		return fmt.Errorf("%w: last active owner", port.ErrNotAllowed)
+		return port.ErrLastOwner
 	}
 	return nil
 }

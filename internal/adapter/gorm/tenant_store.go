@@ -101,10 +101,14 @@ func (s *Store) saveTenant(ctx context.Context, tenant model.Tenant) error {
 		return port.ErrInvalid
 	}
 	return s.withRetry(ctx, true, func(ctx context.Context, db *gorm.DB) error {
-		return errors.WithStack(db.Clauses(clause.OnConflict{
+		err := db.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "id"}},
 			UpdateAll: true,
-		}).Create(fromTenant(tenant)).Error)
+		}).Create(fromTenant(tenant)).Error
+		if isUniqueViolation(err, "tenants", "slug") {
+			return port.ErrAlreadyExists
+		}
+		return errors.WithStack(err)
 	})
 }
 

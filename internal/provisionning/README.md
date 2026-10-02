@@ -1,263 +1,142 @@
-# Provisionning API — instance administration (management plane)
+# Provisioning API
 
-The Provisionning API lets an external system provision and reconcile a Xolo instance
-without any human interaction: a control plane, a Kubernetes operator, a
-Terraform provider, an Ansible playbook or a plain script.
+The dedicated listener exposes the App Covenant `0.1.0-draft.1` manifest and
+five complete PUT operations. It shares transactional stores with the public
+server but has its own TLS configuration. The public OpenAI-compatible `/v1/`
+proxy is unaffected.
 
-It is deliberately **not** part of `/api/v1/`. Its security boundary is
-different — instance-wide privileges, no user context — so it lives on its own
-listener, on its own port, with its own TLS configuration, its own middleware
-chain and its own authentication mechanism.
+This is lot 2: unit reads, ETags, preconditions, lists, synchronization and
+webhooks are still pending. The manifest identifies the targeted contract;
+it is not a claim of complete conformance. Do not use conditional writes yet.
 
-```
-Xolo process
-├── http.Server (internal/http)          Web UI, OIDC, /api/v1, LLM proxy
-└── provisionning.Server (internal/provisionning)  dedicated listener + port + mutual TLS
-        └── handler/v1                   transport only
-                └── service.ProvisioningService   (internal/core/service)
-                        └── port.TenantStore / OrgStore / UserStore / RoleStore
-```
+## Configuration and authority
 
-The resources are nested the way the domain is: a **tenant** owns
-**organizations** and **users**, an organization owns **members** and **roles**.
-
-Both servers share the root context of `cmd/server`, and the Provisionning API uses the
-**same store instances** as the public server (cache and event decorators
-included): no second database connection, no second repository implementation.
-
-## Authentication
-
-Mutual TLS, and nothing else. There is no OIDC, no session, no cookie and no
-user API token on this port, and no Provisionning API endpoint is ever mounted on the
-public HTTP port. There is no anonymous fallback.
-
-The listener is configured with `tls.RequireAndVerifyClientCert`, so the TLS
-stack rejects any connection presenting no client certificate, or one that is
-not signed by the configured certificate authority, before any handler runs. The
-handler chain re-checks the peer certificate as defense in depth and answers
-`401` if it is missing.
-
-Any client holding a valid certificate administers the whole instance. Its
-identity (common name, serial number, subject) is recorded in the request
-context and in the logs; it is not used for authorization decisions today, but
-it is the anchor for per-certificate scopes later.
-
-TLS material is loaded at startup, before the listener opens: a missing or
-inconsistent certificate, key or CA bundle is a startup failure, never a
-first-request failure.
-
-## Configuration
-
-| Variable | Default | Description |
-|---|---|---|
-| `XOLO_PROVISIONNING_API_ENABLED` | `false` | Opens the administration listener |
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `XOLO_PROVISIONNING_API_ENABLED` | `false` | Enable the separate listener |
 | `XOLO_PROVISIONNING_API_ADDRESS` | `:3003` | Listen address |
-| `XOLO_PROVISIONNING_API_TLS_CERT_FILE` | — | Server certificate (PEM), required when enabled |
-| `XOLO_PROVISIONNING_API_TLS_KEY_FILE` | — | Server private key (PEM), required when enabled |
-| `XOLO_PROVISIONNING_API_TLS_CLIENT_CA_FILE` | — | Authority verifying client certificates, required when enabled |
-| `XOLO_PROVISIONNING_API_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown budget |
+| `XOLO_PROVISIONNING_API_TLS_CERT_FILE` | — | Server certificate PEM |
+| `XOLO_PROVISIONNING_API_TLS_KEY_FILE` | — | Server private key PEM |
+| `XOLO_PROVISIONNING_API_TLS_CLIENT_CA_FILE` | — | Trusted client CA bundle PEM |
+| `XOLO_PROVISIONNING_API_AUTHORIZED_URIS` | — | Required comma-separated absolute URI allowlist |
+| `XOLO_PROVISIONNING_API_RATE_LIMIT` | `10` | Requests per second per authorized URI, positive |
+| `XOLO_PROVISIONNING_API_RATE_BURST` | `20` | Burst per URI, positive integer |
+| `XOLO_PROVISIONNING_API_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown timeout |
 
-Multi-tenancy is configured on the instance, not on this API:
+TLS 1.3 is required. Client certificates must chain to the configured CA and
+contain exactly one URI SAN matching the allowlist exactly. CN, DNS SAN,
+bearer tokens, cookies and forwarded certificate headers grant no authority.
+An authorized URI controls the whole instance, including suspended resources.
+Certificate failures fail the TLS handshake; a request-time rejection returns
+`403 client_certificate_rejected`.
 
-| Variable | Default | Description |
-|---|---|---|
-| `XOLO_MULTITENANCY_ENABLED` | `false` | Allows more than one tenant |
-| `XOLO_MULTITENANCY_HOST_PATTERN` | — | Hostname template, e.g. `{tenant}.xolo.example.com`, required when enabled |
-| `XOLO_MULTITENANCY_DEFAULT_TENANT_SLUG` | `default` | The tenant served when multi-tenancy is disabled |
+Rate budgets are local to each server replica and reset on restart. A rejection
+returns `429 rate_limited`, a positive integer `Retry-After` in seconds, and
+performs no mutation. Use retry backoff with jitter.
 
-## Endpoints
+`X-Request-ID` accepts exactly one 32-character lowercase hexadecimal value.
+Otherwise the server generates one, discarding the invalid input. Every HTTP
+response echoes the selected ID; access logs and mutation audits use it.
+It is a correlation identifier, not an idempotency key.
 
-| Method | Route | Notes |
-|---|---|---|
-| `GET` | `/v1/healthz` | Behind mutual TLS as well |
-| `GET` | `/v1/permissions` | The RBAC catalog: the only source of valid permission codes |
-| `GET` | `/v1/tenants` | `?slug=` for an exact lookup, otherwise `?page=&limit=` |
-| `POST` | `/v1/tenants` | **Refused with `409` on a single-tenant instance** |
-| `GET` | `/v1/tenants/{tenantID}` | |
-| `PATCH` | `/v1/tenants/{tenantID}` | `name`, `description`, `active`. The slug is immutable |
-| `DELETE` | `/v1/tenants/{tenantID}` | Removes everything the tenant owns |
-| `GET` | `/v1/tenants/{tenantID}/organizations` | `?slug=` for an exact lookup, otherwise `?page=&limit=` |
-| `POST` | `/v1/tenants/{tenantID}/organizations` | Creates the organization, its builtin roles and, optionally, its initial owner |
-| `GET` | `/v1/tenants/{tenantID}/organizations/{orgID}` | |
-| `PATCH` | `/v1/tenants/{tenantID}/organizations/{orgID}` | `name`, `description`, `active`, `currency`, `shareQuotaEqually`. The slug is immutable |
-| `DELETE` | `/v1/tenants/{tenantID}/organizations/{orgID}` | |
-| `GET` | `/v1/tenants/{tenantID}/organizations/{orgID}/members` | Paginated |
-| `POST` | `/v1/tenants/{tenantID}/organizations/{orgID}/members` | `userId` **or** `user{provider,subject,…}`, plus `roleIds[]` and/or `builtinRoles[]` |
-| `GET` | `/v1/tenants/{tenantID}/organizations/{orgID}/members/{membershipID}` | |
-| `PUT` | `/v1/tenants/{tenantID}/organizations/{orgID}/members/{membershipID}/roles` | Full replacement of the role set |
-| `DELETE` | `/v1/tenants/{tenantID}/organizations/{orgID}/members/{membershipID}` | |
-| `GET` | `/v1/tenants/{tenantID}/organizations/{orgID}/roles` | Builtin and custom roles |
-| `POST` | `/v1/tenants/{tenantID}/organizations/{orgID}/roles` | Custom role |
-| `GET` | `/v1/tenants/{tenantID}/organizations/{orgID}/roles/{roleID}` | |
-| `PUT` | `/v1/tenants/{tenantID}/organizations/{orgID}/roles/{roleID}` | Custom roles only |
-| `DELETE` | `/v1/tenants/{tenantID}/organizations/{orgID}/roles/{roleID}` | Custom roles only |
-| `GET` | `/v1/tenants/{tenantID}/users` | `?provider=&subject=` for an exact lookup, otherwise `?search=&active=&page=&limit=` |
-| `PUT` | `/v1/tenants/{tenantID}/users` | Idempotent upsert on `(provider, subject)`: `201` when created, `200` otherwise |
-| `GET` | `/v1/tenants/{tenantID}/users/{userID}` | |
-| `PATCH` | `/v1/tenants/{tenantID}/users/{userID}` | `email`, `displayName`, `active` |
+## Common routes
 
-Users hang from the tenant because `(provider, subject)` is only unique within
-one: the same person signing in on two tenants owns two distinct accounts.
+`GET /v1/manifest` returns only `name`, `version` (the Xolo build release) and
+`contract_version` (`0.1.0-draft.1`). Read it before writes and after upgrades.
 
-### Single-tenant instances
+| PUT path | Mutable fields |
+| --- | --- |
+| `/v1/tenants/{tenantID}` | `slug`, `name`, `status` |
+| `/v1/tenants/{tenantID}/domains/{hostname}` | `status` |
+| `/v1/tenants/{tenantID}/organizations/{organizationID}` | `slug`, `name`, `status` |
+| `/v1/tenants/{tenantID}/members/{memberID}` | `email`, optional `display_name`, `tenant_role`, `status` |
+| `/v1/tenants/{tenantID}/organizations/{organizationID}/members/{memberID}` | `role`, `status` |
 
-A default installation owns exactly one tenant, `default`, created by the schema
-migration. It is not visible to end users — no subdomain, no change of URL — but
-it is the `{tenantID}` every route above needs. A control plane discovers it
-with `GET /v1/tenants?slug=default`, then uses that identifier throughout.
+UUID keys use canonical lowercase syntax. Tenant roles are `owner`/`member`;
+membership roles are `owner`/`admin`/`member`. Status is `active`/`suspended`.
+Tenant creation remains disabled in single-tenant mode; existing tenants can
+still be updated. A tenant account PUT creates no identity, invitation or
+membership. Existing platform privileges and provider identities are preserved,
+and provisioning cannot assign configured default-admin emails to other accounts.
 
-Creating a second tenant is refused with `409` while
-`XOLO_MULTITENANCY_ENABLED` is false: no hostname would resolve to it, so its
-organizations would be unreachable.
+PUT requires `application/json` (valid media-type parameters are accepted), one
+object, declared string fields and no nulls. All fields except `display_name`
+are required. Omitting `display_name` clears it; an empty result is omitted.
+The entire body, including trailing whitespace, is limited to 1,048,576 bytes.
+Invalid types/JSON, unknown fields, invalid UTF-8 and excess bytes return
+`400 invalid_json`; absent fields and invalid values return
+`400 invalid_representation`. Unsupported media types return `415`.
 
-Payloads are JSON in camelCase, timestamps are RFC 3339, and collections are
-returned as `{"items": […], "page": 1, "limit": 50, "total": 123}`. Unknown
-fields are rejected so a misspelled field is reported instead of ignored.
+Normalization follows Go Unicode trimming and lowercase mapping: slug, email
+and hostname are trimmed and lowercased; names are trimmed. Roles and statuses
+are case-sensitive and trimmed, **except member status which is not trimmed**.
+Limits after normalization are 63 bytes for slug, 200 for name/display name,
+320 for email and 253 for hostname. Email requires only `@` and no ASCII control
+characters. Names also reject ASCII controls. Hostnames are ASCII DNS labels,
+without IP literals, ports, trailing dots or the shared application hostname.
+There is no NFC, IDNA or provider-specific email rewriting.
 
-### Errors
+All successful common PUTs return `200` and only the normalized representation,
+including creation. Identical normalized writes preserve rows, timestamps,
+audit and publication records. Changes commit atomically. Tenant/organization
+owners are protected against concurrent demotion or suspension:
+`409 last_owner`. Parent suspension is allowed and does not rewrite children.
+Custom membership roles survive a common role update.
 
-Every error uses the same envelope:
+Errors use `{"error":{"code":"...","message":"..."}}`. Missing parents return
+`404 parent_not_found`; UUID reassignment and uniqueness conflicts return a
+non-disclosing `409 conflict`. Invalid/reserved domains return
+`400 invalid_hostname`. Unsupported routes and methods return `404 not_found`.
+Technical failures return `500 internal_error` without database diagnostics.
 
-```json
-{"error": {"code": "conflict", "message": "organization with slug \"acme\" already exists in this tenant (id: c9m2…)"}}
-```
+## Persistent host routing
 
-| Code | HTTP | Cause |
-|---|---|---|
-| `invalid_request` | 400 | Malformed body, unknown field, invalid query parameter |
-| `unauthorized` | 401 | No verified client certificate |
-| `not_found` | 404 | Unknown resource, or a resource belonging to another tenant or organization |
-| `method_not_allowed` | 405 | Known resource, wrong method |
-| `conflict` | 409 | Existing resource, or a business invariant that refuses the change |
-| `unprocessable` | 422 | Well-formed value refused by the domain |
-| `internal_error` | 500 | Unexpected failure |
+Public routing resolves an active domain record to an active tenant. The shared
+hostname from `XOLO_HTTP_BASE_URL` is reserved and continues to serve the default
+tenant in single-tenant mode. That binding survives a tenant slug rename.
+Domain and tenant status are read from the database, without a stale local cache.
+Base URLs and OIDC callbacks use the validated domain, retaining the configured
+scheme, port and base path. The identity provider must allow these callback URLs.
 
-Messages are always built explicitly. Stack traces, SQL errors, file paths, TLS
-details and secrets never reach the client: the full detail is logged
-server-side.
+`XOLO_MULTITENANCY_HOST_PATTERN` is optional and retained only for automatic
+upgrade: at the first startup, existing tenant hosts from the old pattern are
+saved as explicit domains. This happens once, with no creation events for
+historical domains. Later tenant creation, slug changes or pattern edits never
+create routes implicitly. Provision domains with PUT. Existing explicit domain
+records and suspensions are preserved; collisions stop startup.
 
-## Identity model
+## Xolo extensions
 
-A user is identified by its `provider` + `subject` tuple **within its tenant**,
-the same key interactive authentication uses, so a provisioned user can log in
-afterwards. The API deliberately offers no email-based identity: `email` is a
-profile field, never an identifier.
+Extensions live under `/v1/xolo` and retain Xolo-specific representations:
 
-### Provisioning ahead of the first sign-in
+- `GET /healthz` and `GET /permissions`.
+- `GET`/`PATCH /tenants/{tenantID}` for Xolo tenant metadata.
+- `GET`/`PATCH /tenants/{tenantID}/organizations/{orgID}` for settings including
+  description, currency and quota sharing.
+- Role CRUD under `/tenants/{tenantID}/organizations/{orgID}/roles`.
+- `PUT /tenants/{tenantID}/organizations/{orgID}/members/{membershipID}/roles`
+  for Xolo role assignments using the internal membership identifier.
+- `GET`/`PUT /tenants/{tenantID}/users` for provider/subject identity lookup and
+  provisioning. This extension is separate from the common member declaration.
 
-`POST /v1/tenants/{tenantID}/organizations` creates its owner before that person
-ever signs in, so the account already exists when they do. That requires the caller to know their
-`subject` — the identifier the identity provider assigns them — in advance. It
-works when the control plane also owns the identity provider, or derives the
-subject deterministically.
+These extension payloads may include IDs, timestamps and Xolo settings. Their
+creation/deletion responses retain their existing `201`/`204` semantics.
+They do not enlarge the minimal manifest or the common contract.
 
-When the subject cannot be known ahead of time, do not disable
-`XOLO_HTTP_AUTHN_AUTO_CREATE_USERS`: it would lock those people out. Use
-`XOLO_HTTP_AUTHN_ACTIVE_BY_DEFAULT=false` instead. The account is then created
-on first sign-in but stays inactive and grants nothing. The control plane picks
-it up with `GET /v1/tenants/{tenantID}/users?active=false`, attaches it to an
-organization with `POST /v1/tenants/{tenantID}/organizations/{orgID}/members`,
-and enables it with
-`PATCH /v1/tenants/{tenantID}/users/{userID} {"active": true}`.
+## Upgrade
 
-## Invariants
+Database conversion is automatic at startup. Back up the database, preserve
+`XOLO_SECRET_KEY`, stop older replicas, then start the new release. Existing
+keys and encrypted secrets remain valid. Sessions with old tenant IDs require
+sign-in again; external clients holding old IDs must refresh them.
 
-- Provisioning an organization administrator **never** grants platform-wide privileges.
-  A user created through this API receives exactly the `user` platform role, and
-  the platform roles of an existing user are never modified.
-- The addresses listed in `XOLO_HTTP_AUTHN_DEFAULT_ADMINS` are reserved: writing
-  one of them on a user is refused with `422`. The authentication bridge grants
-  the platform admin role to whoever signs in with such an address, so accepting
-  it here would be an indirect privilege escalation.
-- An organization always keeps at least one owner: removing or downgrading its
-  last one is refused with `409`.
-- A role can only be assigned to a membership of the organization it belongs to.
-  Anything else is `422`, and no role is modified.
-- A membership or role belonging to another organization is reported as `404`,
-  and so is an organization or a user belonging to another tenant.
-- A user is always resolved inside the organization's own tenant, which is what
-  makes cross-tenant membership impossible.
-- The `default` tenant can neither be deleted nor deactivated: it is the tenant
-  every single-tenant instance resolves to.
-- Builtin roles cannot be modified nor deleted.
-- Only permission codes present in the RBAC catalog are accepted.
+For provisioning clients, this release intentionally replaces the old routes:
+there are no aliases and no `/v2`. Change clients to complete PUT payloads and
+client-generated UUIDs, and move Xolo-specific calls to `/v1/xolo`. Reissue any
+client certificate without exactly one authorized URI SAN and configure
+`XOLO_PROVISIONNING_API_AUTHORIZED_URIS`. For example, the certificate extension
+`subjectAltName=URI:urn:example:console` matches that same configured URI.
 
-## Reconciliation
-
-Identifiers are stable, `PUT /v1/tenants/{tenantID}/users` is idempotent,
-creating a tenant or an organization on an existing slug answers `409` while
-including the existing identifier, and the lookup endpoints allow the current
-state to be read back in full. The single side effect of
-`POST /v1/tenants/{tenantID}/organizations` is documented: it creates the
-builtin roles of the organization.
-
-`CreateOrganization` orchestrates several stores, and the ports expose no
-cross-store transaction. Any failure after the organization row exists triggers a
-best-effort compensation (the organization is deleted, memberships cascade),
-logged if it fails in turn. A pre-existing user is never deleted. A proper
-`port.TxManager` would be the clean fix; it is out of the MVP scope.
-
-## Development PKI
-
-```bash
-mkdir -p dev-pki && cd dev-pki
-
-# Certificate authority
-openssl req -x509 -newkey rsa:4096 -nodes -days 365 \
-  -keyout ca.key -out ca.crt -subj "/CN=xolo-dev-ca"
-
-# Server certificate
-openssl req -newkey rsa:4096 -nodes -keyout server.key -out server.csr \
-  -subj "/CN=localhost"
-openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
-  -out server.crt -days 365 \
-  -extfile <(printf "subjectAltName=DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth")
-
-# Client certificate
-openssl req -newkey rsa:4096 -nodes -keyout client.key -out client.csr \
-  -subj "/CN=control-plane"
-openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
-  -out client.crt -days 365 \
-  -extfile <(printf "extendedKeyUsage=clientAuth")
-```
-
-```bash
-XOLO_SECRET_KEY=$(openssl rand -hex 32) \
-XOLO_PROVISIONNING_API_ENABLED=true \
-XOLO_PROVISIONNING_API_TLS_CERT_FILE=dev-pki/server.crt \
-XOLO_PROVISIONNING_API_TLS_KEY_FILE=dev-pki/server.key \
-XOLO_PROVISIONNING_API_TLS_CLIENT_CA_FILE=dev-pki/ca.crt \
-bin/server
-
-# Refused: no client certificate
-curl -sk https://localhost:3003/v1/permissions
-
-# Accepted
-curl -s --cacert dev-pki/ca.crt --cert dev-pki/client.crt --key dev-pki/client.key \
-  "https://localhost:3003/v1/tenants?slug=default"
-
-# Then, with the identifier it returned:
-TENANT=... # the id read above
-
-curl -s --cacert dev-pki/ca.crt --cert dev-pki/client.crt --key dev-pki/client.key \
-  -X POST "https://localhost:3003/v1/tenants/$TENANT/organizations" \
-  -d '{"slug":"acme","name":"Acme","owner":{"provider":"openid-connect","subject":"sub-123","email":"owner@acme.tld","displayName":"Owner"}}'
-```
-
-## Out of scope for now
-
-- Providers, LLM models, virtual models, middlewares, applications and their
-  tokens, quotas, alerts and event settings. They all already have a
-  `port.*Store`: exposing them means adding a handler file and its DTOs, with no
-  architectural change.
-- Per-certificate scopes.
-- Provisionning API mutations emit no Xolo event (they are logged server-side). This is
-  the documented behavior of the event decorators when no user is in context.
-- Email pre-provisioning: the existing `InviteToken` mechanism remains the email
-  path, through the Web UI.
-- No generated OpenAPI specification.
-
-## User documentation
-
-A French user-facing version of this page lives in
-[`docs/fr/administration/provisioning/provisioning.md`](../../docs/fr/administration/provisioning/provisioning.md).
+Tests use ephemeral CAs and real TLS handshakes. Database tests exercise SQLite
+and PostgreSQL. App Covenant tooling remains external; no conformance runner
+or permanent CI workflow is installed in Xolo.

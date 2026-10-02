@@ -162,13 +162,9 @@ func getOIDCAuthnHandlerFromConfig(ctx context.Context, conf *config.Config) (*o
 		return nil, errors.WithStack(err)
 	}
 
-	if conf.Multitenancy.Enabled {
-		// Each tenant is served on its own hostname, so each needs its own
-		// redirect URI: a provider registered once at startup would send every
-		// tenant back to a single host, where its session — bound to both the
-		// hostname and the tenant — could not be used.
-		opts = append(opts, oidc.WithProviderResolver(newHostScopedProviders(factories).Resolve))
-	}
+	// Dedicated domains can also address the default tenant. Build callbacks
+	// from the validated request base URL in both deployment modes.
+	opts = append(opts, oidc.WithProviderResolver(newHostScopedProviders(factories).Resolve))
 
 	gothic.Store = sessionStore
 

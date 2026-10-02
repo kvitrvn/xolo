@@ -106,3 +106,5 @@ func UpdateOrganization(org Organization, opts ...OrgOption) *BaseOrganization {
 }
 
 func (v *BaseOrganization) SetID(id OrgID) { v.id = id }
+
+func WithOrgSlug(slug string) OrgOption { return func(o *BaseOrganization) { o.slug = slug } }

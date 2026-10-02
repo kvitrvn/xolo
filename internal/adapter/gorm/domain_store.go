@@ -40,7 +40,7 @@ func (s *Store) SaveDomain(ctx context.Context, d model.Domain) error {
 			return err
 		}
 		if reserved > 0 {
-			return port.ErrNotAllowed
+			return port.ErrInvalidHostname
 		}
 		var old Domain
 		err = db.First(&old, "hostname = ?", hostname).Error
