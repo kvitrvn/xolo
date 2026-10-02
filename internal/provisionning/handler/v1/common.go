@@ -7,31 +7,9 @@ import (
 	"mime"
 	"net/http"
 	"unicode/utf8"
-
-	"github.com/xolo-gateway/xolo/internal/core/model"
-	"github.com/xolo-gateway/xolo/internal/core/service"
 )
 
 const ContractVersion = "0.1.0-draft.1"
-
-type resourceRepresentation struct {
-	Slug   string       `json:"slug"`
-	Name   string       `json:"name"`
-	Status model.Status `json:"status"`
-}
-type memberRepresentation struct {
-	Email       string           `json:"email"`
-	DisplayName string           `json:"display_name,omitempty"`
-	TenantRole  model.TenantRole `json:"tenant_role"`
-	Status      model.Status     `json:"status"`
-}
-type membershipRepresentation struct {
-	Role   model.MembershipRole `json:"role"`
-	Status model.Status         `json:"status"`
-}
-type domainRepresentation struct {
-	Status model.Status `json:"status"`
-}
 
 // Read the entire bounded body before decoding: trailing whitespace counts
 // toward the size limit. RawMessage preserves null/missing/type distinctions.
@@ -136,59 +114,4 @@ func hexUnit(b []byte) int {
 
 func (h *Handler) handleManifest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]string{"name": "Xolo", "version": h.version, "contract_version": ContractVersion})
-}
-func (h *Handler) handleCommonResource(w http.ResponseWriter, r *http.Request) {
-	p, ok := decodeCommon(w, r, []string{"slug", "name", "status"})
-	if !ok {
-		return
-	}
-	input := service.CommonResource{Slug: p["slug"], Name: p["name"], Status: model.Status(p["status"])}
-	var out service.CommonResource
-	var err error
-	if r.PathValue("orgID") == "" {
-		out, err = h.provisioning.PutCommonTenant(r.Context(), model.TenantID(r.PathValue("tenantID")), input)
-	} else {
-		out, err = h.provisioning.PutCommonOrganization(r.Context(), model.TenantID(r.PathValue("tenantID")), model.OrgID(r.PathValue("orgID")), input)
-	}
-	if err != nil {
-		writeServiceError(r.Context(), w, err, "could not write resource")
-		return
-	}
-	writeJSON(w, 200, resourceRepresentation{out.Slug, out.Name, out.Status})
-}
-func (h *Handler) handleCommonMember(w http.ResponseWriter, r *http.Request) {
-	p, ok := decodeCommon(w, r, []string{"email", "tenant_role", "status"}, "display_name")
-	if !ok {
-		return
-	}
-	out, err := h.provisioning.PutCommonMember(r.Context(), model.TenantID(r.PathValue("tenantID")), model.UserID(r.PathValue("memberID")), service.CommonMember{Email: p["email"], DisplayName: p["display_name"], TenantRole: model.TenantRole(p["tenant_role"]), Status: model.Status(p["status"])})
-	if err != nil {
-		writeServiceError(r.Context(), w, err, "could not write member")
-		return
-	}
-	writeJSON(w, 200, memberRepresentation{out.Email, out.DisplayName, out.TenantRole, out.Status})
-}
-func (h *Handler) handleCommonDomain(w http.ResponseWriter, r *http.Request) {
-	p, ok := decodeCommon(w, r, []string{"status"})
-	if !ok {
-		return
-	}
-	out, err := h.provisioning.PutCommonDomain(r.Context(), model.TenantID(r.PathValue("tenantID")), r.PathValue("hostname"), model.Status(p["status"]))
-	if err != nil {
-		writeServiceError(r.Context(), w, err, "could not write domain")
-		return
-	}
-	writeJSON(w, 200, domainRepresentation{out})
-}
-func (h *Handler) handleCommonMembership(w http.ResponseWriter, r *http.Request) {
-	p, ok := decodeCommon(w, r, []string{"role", "status"})
-	if !ok {
-		return
-	}
-	out, err := h.provisioning.PutCommonMembership(r.Context(), model.TenantID(r.PathValue("tenantID")), model.OrgID(r.PathValue("orgID")), model.UserID(r.PathValue("memberID")), service.CommonMembership{Role: model.MembershipRole(p["role"]), Status: model.Status(p["status"])})
-	if err != nil {
-		writeServiceError(r.Context(), w, err, "could not write membership")
-		return
-	}
-	writeJSON(w, 200, membershipRepresentation{out.Role, out.Status})
 }

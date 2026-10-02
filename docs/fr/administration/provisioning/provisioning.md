@@ -2,9 +2,9 @@
 
 L'API utilise un listener HTTPS dédié, distinct du proxy public `/v1/`.
 Elle expose le manifeste et les cinq PUT du contrat App Covenant
-`0.1.0-draft.1`. Les lectures communes, ETags, préconditions, listes,
-synchronisation et webhooks seront livrés dans les lots suivants : cette
-version ne constitue pas encore une implémentation complète du contrat.
+`0.1.0-draft.1`, ainsi que les lectures communes, ETags, préconditions, listes
+et flux de synchronisation des lots 1 à 3. Les webhooks restent prévus au
+lot 4 ; cette version ne revendique pas une conformité complète au contrat.
 
 ## Configuration et certificats
 
@@ -132,3 +132,98 @@ Les fonctions propres à Xolo sont disponibles sous `/v1/xolo` :
 
 Ces extensions gardent leurs représentations spécifiques et leurs réponses de
 création/suppression `201`/`204`. Elles ne font pas partie du manifeste minimal.
+
+## Lectures, préconditions et synchronisation
+
+Chaque chemin PUT accepte aussi GET, avec la même représentation et un en-tête
+`ETag: W/"u-<unix-microseconds>"`. Ce timestamp appartient à la représentation
+commune : connexion, rattachement d'identité et métadonnées propres à Xolo ne
+le modifient pas. Deux changements peuvent partager la même microseconde ;
+l'ETag est opaque et ne constitue pas un compteur de révision.
+
+PUT accepte `If-Match: *` pour exiger une ressource existante, ou une liste de
+tags séparés par des virgules. La comparaison ignore `W/`, conformément à la
+règle particulière du contrat. Validation, comparaison et mutation partagent
+le verrou transactionnel. Une condition périmée renvoie
+`412 precondition_failed`, même pour un corps identique ; une syntaxe incorrecte
+renvoie `400 invalid_precondition`.
+
+Retirer la dernière clé d'un chemin unitaire donne sa collection, y compris les
+ressources suspendues. Les adhésions se listent dans
+`/v1/tenants/{tenantID}/organizations/{organizationID}/members`.
+`limit` vaut 100 par défaut, entre 1 et 1000. La réponse contient `items`
+(`key`, `representation`, `etag`) et `next_cursor`, nul à la fin.
+Continuer avec `cursor` et la même limite. Le tri utilise les clés immuables
+canoniques, comparées octet par octet ; aucun total ni instantané global des
+pages n'est promis.
+
+Les curseurs de liste sont authentifiés par HMAC-SHA256 et liés à l'instance,
+la collection, ses parents et la taille de page. Ils expirent **24 heures après
+la première page**, sans renouvellement à la continuation. Un curseur altéré
+ou utilisé dans un autre périmètre renvoie `400 invalid_cursor` ; un curseur
+reconnu mais expiré renvoie `410 cursor_expired`. Ils sont opaques, non chiffrés.
+
+`GET /v1/events/cursor` renvoie `{"cursor":"..."}`, même sur un flux vide.
+`GET /v1/events?cursor=...&limit=100` renvoie `items`, `next_cursor` toujours
+non vide et `has_more`. Le curseur d'événements est lié à l'instance et au flux,
+mais pas à la limite. `has_more=false` signifie que l'horizon de cette réponse
+est rattrapé : continuer à interroger le flux pour les changements suivants.
+
+Le profil CloudEvents 1.0 est fermé : UUID d'événement, source persistante
+`urn:uuid:...`, séquence décimale sous forme de chaîne, date, request ID et
+`data` contenant seulement `resource_type`, `key`, `etag`. Aucun nom, e-mail,
+acteur ou attribut interne n'est publié. L'audit conserve séparément l'acteur
+et les états avant/après. Un PUT effectif émet un fait ; répétition et rollback
+n'en émettent aucun. Les changements locaux de rôle et de statut conservent
+leurs faits distincts. Une modification propre à Xolo n'émet pas de fait commun.
+
+Capturer C0 **avant** de lister les cinq familles, puis rejouer depuis C0 en
+relisant chaque clé avec GET. Découvrir les enfants de tout nouveau tenant ou
+organisation. Sérialiser lecture et application par clé, persister les données
+avant le checkpoint et dédupliquer par `(source, id)`. Une lecture peut être
+plus récente que son événement. Une erreur sur une référence connue, y compris
+un 404 inattendu, retient le checkpoint. Une extension inconnue et indépendante
+peut être signalée puis dépassée. Sur 410, reconstruire toutes les collections
+dans une nouvelle génération depuis un nouveau C0 ; remplacer la génération
+précédente seulement après rattrapage du flux.
+
+### Stockage, horizon et rétention
+
+La migration automatique `202610020002` crée `common_records` et `common_feeds`,
+reprend les ressources existantes et retire les anciens snapshots internes de
+la table de publication. Les audits internes restent conservés. Aucune action
+manuelle ni événement de création artificiel n'est nécessaire. La source du
+flux et la clé de signature des curseurs persistent dans la base, indépendamment
+des redémarrages et changements d'URL ; elles font partie de la sauvegarde.
+
+Tous les writers d'identité verrouillent `publication_clocks` avant de lire ou
+modifier les parents : verrou de ligne PostgreSQL, verrou d'écriture SQLite.
+Le verrou est conservé jusqu'au commit ou rollback. Le writer suivant ne peut
+pas allouer ou valider une position supérieure pendant ce temps. Lecture du
+flux, capture et purge utilisent ce même verrou. Le compteur validé forme donc
+un horizon sûr, y compris les trous liés à l'audit interne. Ce choix limite le
+débit des écritures d'identité ; aucun publisher asynchrone ni calcul fondé sur
+`MAX(sequence)` n'est nécessaire.
+
+La rétention est **illimitée par défaut**, sans purge automatique ni variable
+d'environnement dans ce lot. La méthode de maintenance du store
+`PurgeCommonEvents(ctx, before)` retire seulement un préfixe résolu antérieur
+au seuil UTC. Elle persiste la position du dernier événement supprimé, même
+après purge complète. Un retour en arrière de l'horloge ne permet pas de
+supprimer un événement récent situé plus tôt dans la séquence. Un ancien
+curseur dont l'historique est perdu renvoie 410, sans renouvellement implicite.
+Toute future politique planifiée doit laisser assez de temps pour reconstruire.
+
+Le store valide les parents immuables et les références publiées dans la même
+transaction, y compris pour une CLI. La publication n'accepte aucun payload
+fourni par l'appelant. Xolo utilise un identifiant SQL applicatif de confiance,
+sans RLS PostgreSQL par tenant ni rôle SQL séparé pour la publication. SQLite
+ne dispose pas de cette frontière de rôles. Le code possédant le handle GORM
+brut ou un accès direct en écriture à la base reste de confiance et peut
+contourner ces contrôles ; les clients provisioning ne reçoivent aucun de ces
+accès. Aucune protection SQL contre un identifiant applicatif compromis n'est
+revendiquée.
+
+Les suppressions physiques des extensions Xolo restent hors du profil commun
+sans suppression. Un 404 consécutif ne constitue pas un tombstone implicite ;
+le protocole de cycle de vie relève d'un lot ultérieur.

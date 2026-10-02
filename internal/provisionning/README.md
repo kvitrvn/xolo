@@ -1,13 +1,12 @@
 # Provisioning API
 
 The dedicated listener exposes the App Covenant `0.1.0-draft.1` manifest and
-five complete PUT operations. It shares transactional stores with the public
+five complete PUT operations, unit reads, lists and the event feed. It shares transactional stores with the public
 server but has its own TLS configuration. The public OpenAI-compatible `/v1/`
 proxy is unaffected.
 
-This is lot 2: unit reads, ETags, preconditions, lists, synchronization and
-webhooks are still pending. The manifest identifies the targeted contract;
-it is not a claim of complete conformance. Do not use conditional writes yet.
+Lots 1–3 are implemented. Webhooks remain pending in lot 4. The manifest
+identifies the targeted contract; it is not a claim of complete conformance.
 
 ## Configuration and authority
 
@@ -88,6 +87,98 @@ Errors use `{"error":{"code":"...","message":"..."}}`. Missing parents return
 non-disclosing `409 conflict`. Invalid/reserved domains return
 `400 invalid_hostname`. Unsupported routes and methods return `404 not_found`.
 Technical failures return `500 internal_error` without database diagnostics.
+
+## Reads, conditions and synchronization
+
+Every PUT path also accepts GET, returning the same representation and an
+`ETag: W/"u-<unix-microseconds>"` header. The timestamp belongs to the common
+representation: login, identity attachment and Xolo-only metadata do not change
+it. Timestamp collisions within one microsecond remain possible; ETags are
+opaque validators, not revision counters.
+
+PUT accepts `If-Match: *` (existing resource) or a comma-separated list of entity
+tags. Comparison ignores `W/`, as explicitly required by this contract.
+Validation, comparison and mutation share the transaction lock. A stale
+condition fails with `412 precondition_failed`, even for an identical body;
+malformed syntax returns `400 invalid_precondition`.
+
+Remove the final key from a unit path to list its collection, including
+suspended resources. For example, list memberships at
+`/v1/tenants/{tenantID}/organizations/{organizationID}/members`.
+Use `limit=1..1000` (default 100) and, after the first page, `cursor`.
+The envelope is `{"items":[{"key":{},"representation":{},"etag":"..."}],
+"next_cursor":null}`. Continue until `next_cursor` is null, repeating the same
+limit. Ordering uses immutable canonical keys with bytewise ASCII comparison.
+There is no total count and no cross-page snapshot.
+
+List cursors are HMAC-SHA256 authenticated and bound to the instance,
+collection, parents and effective page size. Their lifetime is **24 hours from
+the first page**; continuation does not renew it. Tampered or wrong-scope
+cursors return `400 invalid_cursor`; expired recognized cursors return
+`410 cursor_expired`. Cursor tokens are opaque, not encrypted.
+
+Capture a feed position with `GET /v1/events/cursor`, which returns
+`{"cursor":"..."}`, even on an empty feed. Then poll
+`GET /v1/events?cursor=...&limit=100`. Responses contain `items`, a nonempty
+`next_cursor`, and `has_more`. Event cursors are instance/feed-bound and do not
+bind the page size. `has_more=false` means caught up to that response's safe
+horizon; polling must continue for subsequent writes.
+
+Events use the closed CloudEvents 1.0 profile: persistent UUID `id`, persistent
+instance `source` (`urn:uuid:...`), decimal-string `sequence`, timestamp,
+request ID and `data` containing only `resource_type`, `key`, `etag`.
+No names, emails, actor identities or internal attributes appear in this feed.
+Audit retains the actor and before/after data separately. One effective PUT
+produces one event; a no-op or rollback produces none. Local changes preserve
+separate status and role facts. Xolo-only changes do not produce common events.
+
+Capture C0 **before** listing all five families. Replay from C0 by GETting each
+referenced key; discover children when encountering a new tenant or organization.
+Serialize reads and application per key, durably apply a page before saving its
+checkpoint, and deduplicate by `(source, id)`. A replay GET can be newer than
+its event. A failed known-resource read, including an unexpected 404, must
+retain the checkpoint. Unknown independent extension events may be reported
+and passed. On 410, rebuild all collections into a new generation from a new
+C0 and replace the previous generation only after replay catches up.
+
+### Storage, horizon and retention
+
+Startup migration `202610020002` creates `common_records` and `common_feeds`,
+backfills existing resources, and removes the former internal-snapshot outbox
+rows. Internal mutation audits remain intact. Existing records need no synthetic
+creation events. Source identity and cursor signing material persist in the
+database and survive restarts and URL changes; include them in backups.
+
+All identity writers acquire the `publication_clocks` row before reading or
+mutating scope data. PostgreSQL uses a row lock; SQLite uses its writer lock.
+The transaction retains it until commit/rollback. A second writer cannot
+allocate or commit a higher position while the first is unresolved. Feed reads,
+cursor capture and purge use the same lock. The committed counter is therefore
+a safe horizon, including settled gaps from internal audit facts. This favors
+correctness over concurrent identity-write throughput; no background publisher
+or `MAX(sequence)` heuristic is used.
+
+Retention is **unlimited by default**, with no automatic purge or environment
+setting in this lot. The store maintenance method
+`PurgeCommonEvents(ctx, before)` removes only a settled prefix older than the
+UTC cutoff and persists the last removed event position, even after complete
+purge. It cannot remove a recent earlier sequence merely because a later clock
+value went backwards. A cursor before the retained boundary returns 410;
+capture and polling never renew lost history. Choose any future scheduled
+retention window long enough for a full reconstruction.
+
+The shared store validates immutable parent links and publication references
+inside each transaction, including CLI calls. Publication insertion is private
+to that path; callers cannot supply public event payloads. Xolo uses one trusted
+application database credential, without PostgreSQL tenant RLS or a separate
+restricted publication role. SQLite has no SQL role boundary. Code holding the
+raw GORM handle or direct database write privileges remains trusted and can
+bypass application checks; provisioning clients receive neither. No SQL-level
+protection against a compromised application credential is claimed.
+
+Physical deletion through existing Xolo extensions is outside this draft's
+no-deletion synchronization profile. Such a deletion must not be interpreted
+as a common tombstone; lifecycle events and recovery belong to the later lot.
 
 ## Persistent host routing
 

@@ -42,11 +42,19 @@ func NewHandler(provisioning *service.ProvisioningService, version ...string) *H
 		h.version = version[0]
 	}
 	h.mux.HandleFunc("GET /v1/manifest", h.handleManifest)
-	h.mux.HandleFunc("PUT /v1/tenants/{tenantID}", h.handleCommonResource)
-	h.mux.HandleFunc("PUT /v1/tenants/{tenantID}/domains/{hostname}", h.handleCommonDomain)
-	h.mux.HandleFunc("PUT /v1/tenants/{tenantID}/organizations/{orgID}", h.handleCommonResource)
-	h.mux.HandleFunc("PUT /v1/tenants/{tenantID}/members/{memberID}", h.handleCommonMember)
-	h.mux.HandleFunc("PUT /v1/tenants/{tenantID}/organizations/{orgID}/members/{memberID}", h.handleCommonMembership)
+	h.mux.HandleFunc("PUT /v1/tenants/{tenantID}", h.handleCommonPut)
+	h.mux.HandleFunc("PUT /v1/tenants/{tenantID}/domains/{hostname}", h.handleCommonPut)
+	h.mux.HandleFunc("PUT /v1/tenants/{tenantID}/organizations/{orgID}", h.handleCommonPut)
+	h.mux.HandleFunc("PUT /v1/tenants/{tenantID}/members/{memberID}", h.handleCommonPut)
+	h.mux.HandleFunc("PUT /v1/tenants/{tenantID}/organizations/{orgID}/members/{memberID}", h.handleCommonPut)
+	for _, path := range []string{"/v1/tenants/{tenantID}", "/v1/tenants/{tenantID}/domains/{hostname}", "/v1/tenants/{tenantID}/organizations/{orgID}", "/v1/tenants/{tenantID}/members/{memberID}", "/v1/tenants/{tenantID}/organizations/{orgID}/members/{memberID}"} {
+		h.mux.HandleFunc("GET "+path, h.handleCommonGet)
+	}
+	for _, path := range []string{"/v1/tenants", "/v1/tenants/{tenantID}/domains", "/v1/tenants/{tenantID}/organizations", "/v1/tenants/{tenantID}/members", "/v1/tenants/{tenantID}/organizations/{orgID}/members"} {
+		h.mux.HandleFunc("GET "+path, h.handleCommonList)
+	}
+	h.mux.HandleFunc("GET /v1/events/cursor", h.handleEventCursor)
+	h.mux.HandleFunc("GET /v1/events", h.handleEvents)
 	// Xolo-specific operations have a separate extension namespace.
 	const ext = "/v1/xolo"
 	h.mux.HandleFunc("GET "+ext+"/healthz", h.handleHealthz)
@@ -73,7 +81,7 @@ func NewHandler(provisioning *service.ProvisioningService, version ...string) *H
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.RawQuery != "" && !strings.HasPrefix(r.URL.Path, "/v1/xolo/") {
+	if r.URL.RawQuery != "" && !strings.HasPrefix(r.URL.Path, "/v1/xolo/") && (r.Method != "GET" || r.URL.Path == "/v1/manifest" || r.URL.Path == "/v1/events/cursor") {
 		writeError(w, 400, "invalid_parameter", "unsupported query parameter")
 		return
 	}

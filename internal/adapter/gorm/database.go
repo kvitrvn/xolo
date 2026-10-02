@@ -391,6 +391,7 @@ func createGetDatabase(db *gorm.DB) func(ctx context.Context) (*gorm.DB, error) 
 						},
 					},
 					{ID: commonMigrationID, Migrate: migrateCommonSchema},
+					{ID: "202610020002", Migrate: migrateCommonReads},
 				})
 
 				m.InitSchema(func(tx *gorm.DB) error {
@@ -447,7 +448,10 @@ func createGetDatabase(db *gorm.DB) func(ctx context.Context) (*gorm.DB, error) 
 						if err := migratePluginSecretScope(tx); err != nil {
 							return err
 						}
-						return installCommonSchema(tx)
+						if err := installCommonSchema(tx); err != nil {
+							return err
+						}
+						return migrateCommonReads(tx)
 					})
 				})
 

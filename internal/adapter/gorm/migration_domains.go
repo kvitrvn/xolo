@@ -66,6 +66,19 @@ func (s *Store) InitializeDomainRouting(ctx context.Context, legacyPattern strin
 				if e = db.First(&stored, "hostname = ?", host).Error; e != nil {
 					return e
 				}
+				// Materialized historical domains also participate in common lists.
+				raw, e := mutationSnapshot(db, mutationKey{"domain", host})
+				if e != nil {
+					return e
+				}
+				rec, e := commonProjection(db, mutationKey{"domain", host}, raw)
+				if e != nil {
+					return e
+				}
+				rec.UpdatedAt = db.NowFunc().UTC()
+				if e = db.Clauses(clause.OnConflict{DoNothing: true}).Create(rec).Error; e != nil {
+					return e
+				}
 				if stored.TenantID != tenant.ID {
 					return fmt.Errorf("legacy tenant hostname conflicts with explicit domain")
 				}

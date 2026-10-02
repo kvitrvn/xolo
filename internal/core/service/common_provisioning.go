@@ -54,6 +54,7 @@ func commonParent(ctx context.Context, tx port.ProvisioningTx, id model.TenantID
 	return err
 }
 func (s *ProvisioningService) PutCommonTenant(ctx context.Context, id model.TenantID, p CommonResource) (CommonResource, error) {
+	ctx = model.WithCommonPUT(ctx)
 	p, err := normalizeCommonResource(p)
 	if err != nil {
 		return p, err
@@ -82,6 +83,7 @@ func (s *ProvisioningService) PutCommonTenant(ctx context.Context, id model.Tena
 	return p, err
 }
 func (s *ProvisioningService) PutCommonOrganization(ctx context.Context, tid model.TenantID, id model.OrgID, p CommonResource) (CommonResource, error) {
+	ctx = model.WithCommonPUT(ctx)
 	p, err := normalizeCommonResource(p)
 	if err != nil {
 		return p, err
@@ -116,6 +118,7 @@ func (s *ProvisioningService) PutCommonOrganization(ctx context.Context, tid mod
 	return p, err
 }
 func (s *ProvisioningService) PutCommonMember(ctx context.Context, tid model.TenantID, id model.UserID, p CommonMember) (CommonMember, error) {
+	ctx = model.WithCommonPUT(ctx)
 	p.Email = model.NormalizeEmail(p.Email)
 	p.DisplayName = strings.TrimSpace(p.DisplayName)
 	p.TenantRole = model.TenantRole(strings.TrimSpace(string(p.TenantRole)))
@@ -164,6 +167,7 @@ func (s *ProvisioningService) PutCommonMember(ctx context.Context, tid model.Ten
 	return p, err
 }
 func (s *ProvisioningService) PutCommonDomain(ctx context.Context, tid model.TenantID, hostname string, status model.Status) (model.Status, error) {
+	ctx = model.WithCommonPUT(ctx)
 	status = model.Status(strings.TrimSpace(string(status)))
 	if !status.Valid() {
 		return status, port.ErrInvalid
@@ -196,6 +200,7 @@ func (s *ProvisioningService) PutCommonDomain(ctx context.Context, tid model.Ten
 	return status, err
 }
 func (s *ProvisioningService) PutCommonMembership(ctx context.Context, tid model.TenantID, oid model.OrgID, uid model.UserID, p CommonMembership) (CommonMembership, error) {
+	ctx = model.WithCommonPUT(ctx)
 	p.Role = model.MembershipRole(strings.TrimSpace(string(p.Role)))
 	p.Status = model.Status(strings.TrimSpace(string(p.Status)))
 	if !p.Role.Valid() || !p.Status.Valid() {

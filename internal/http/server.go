@@ -52,7 +52,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	handler = func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ctx := model.WithActor(r.Context(), model.Actor{URI: "urn:xolo:operator:http", RequestID: uuid.NewString()})
+			ctx := model.WithActor(r.Context(), model.Actor{URI: "urn:xolo:operator:http", RequestID: strings.ReplaceAll(uuid.NewString(), "-", "")})
 
 			ctx = httpCtx.SetBaseURL(ctx, s.opts.BaseURLResolver(r))
 			ctx = httpCtx.SetCurrentURL(ctx, r.URL)

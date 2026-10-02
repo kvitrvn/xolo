@@ -3,10 +3,12 @@ package gorm
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -33,8 +35,8 @@ type MutationAudit struct {
 	After      string `gorm:"type:text"`
 }
 
-// Publication is an outbox independent of the local event ring buffer. Delivery
-// and public projections are supplied by subsequent lots.
+// Publication is the closed common CloudEvent outbox, independent of the local
+// audit event ring buffer. Delivery is supplied by the webhook lot.
 type Publication struct {
 	TenantID   string `gorm:"index"`
 	OrgID      string `gorm:"index"`
@@ -45,7 +47,13 @@ type Publication struct {
 	Payload    string `gorm:"type:text"`
 }
 type mutationKey struct{ kind, id string }
-type mutationState struct{ before map[mutationKey][]byte }
+type mutationState struct {
+	before    map[mutationKey][]byte
+	commonPUT bool
+	actor     model.Actor
+	condition *model.MatchCondition
+	etag      string
+}
 
 func (s *Store) WithProvisioningTransaction(ctx context.Context, fn func(port.ProvisioningTx) error) error {
 	return s.identityTransaction(ctx, func(bound *Store) error { return fn(bound) })
@@ -55,8 +63,15 @@ func (s *Store) identityTransaction(ctx context.Context, fn func(*Store) error) 
 		return fn(s)
 	}
 	actor := model.ActorFromContext(ctx)
-	if actor.RequestID == "" {
-		actor.RequestID = uuid.NewString()
+	if actor.UserID != "" && actor.URI != "" {
+		return port.ErrNotAllowed
+	}
+	if actor.UserID == "" && actor.URI == "" {
+		actor.URI = "urn:xolo:operator:local"
+	}
+	decodedID, idErr := hex.DecodeString(actor.RequestID)
+	if idErr != nil || len(decodedID) != 16 || strings.ToLower(actor.RequestID) != actor.RequestID {
+		actor.RequestID = strings.ReplaceAll(uuid.NewString(), "-", "")
 		ctx = model.WithActor(ctx, actor)
 	}
 	db, err := s.getDatabase(ctx)
@@ -75,7 +90,7 @@ func (s *Store) identityTransaction(ctx context.Context, fn func(*Store) error) 
 				return fmt.Errorf("missing publication clock")
 			}
 			tx = tx.Session(&gorm.Session{SkipDefaultTransaction: true})
-			bound := &Store{getDatabase: func(context.Context) (*gorm.DB, error) { return tx, nil }, transactionBound: true, mutations: &mutationState{before: map[mutationKey][]byte{}}}
+			bound := &Store{getDatabase: func(context.Context) (*gorm.DB, error) { return tx, nil }, transactionBound: true, mutations: &mutationState{before: map[mutationKey][]byte{}, actor: actor, commonPUT: model.IsCommonPUT(ctx)}}
 			if err := fn(bound); err != nil {
 				return err
 			}
@@ -98,6 +113,9 @@ func (s *Store) identityTransaction(ctx context.Context, fn func(*Store) error) 
 // before/after pair and facts are written only after the whole use case succeeds.
 func (s *Store) mutate(ctx context.Context, kind, id string, fn func(*Store) error) error {
 	return s.identityTransaction(ctx, func(bound *Store) error {
+		if c := bound.mutations.condition; c != nil && !c.Matches(bound.mutations.etag) {
+			return port.ErrPreconditionFailed
+		}
 		if err := bound.track(ctx, kind, id); err != nil {
 			return err
 		}
@@ -195,7 +213,8 @@ func (s *Store) flushMutations(ctx context.Context, db *gorm.DB) error {
 		}
 		return keys[i].id < keys[j].id
 	})
-	actor := model.ActorFromContext(ctx)
+	actor := s.mutations.actor
+	ctx = model.WithActor(ctx, actor)
 	actorJSON, err := json.Marshal(actor)
 	if err != nil {
 		return err
@@ -208,6 +227,9 @@ func (s *Store) flushMutations(ctx context.Context, db *gorm.DB) error {
 		}
 		if bytes.Equal(before, after) {
 			continue
+		}
+		if err := validateMutationScope(db, key, before, after); err != nil {
+			return err
 		}
 		if err := checkOwnerTransition(db, key, before, after); err != nil {
 			return err
@@ -226,23 +248,7 @@ func (s *Store) flushMutations(ctx context.Context, db *gorm.DB) error {
 		if err := db.Create(&audit).Error; err != nil {
 			return err
 		}
-		var scope map[string]any
-		source := after
-		if string(after) == "null" {
-			source = before
-		}
-		if err := json.Unmarshal(source, &scope); err != nil {
-			return err
-		}
-		tenantID, _ := scope["tenant_id"].(string)
-		orgID, _ := scope["org_id"].(string)
-		if key.kind == "tenant" {
-			tenantID = key.id
-		}
-		if key.kind == "organization" {
-			orgID = key.id
-		}
-		if err := db.Create(&Publication{TenantID: tenantID, OrgID: orgID, Sequence: clock.Sequence, Resource: key.kind, ResourceID: key.id, Payload: string(after)}).Error; err != nil {
+		if err := publishCommon(ctx, db, key, before, after, s.mutations.commonPUT); err != nil {
 			return err
 		}
 	}

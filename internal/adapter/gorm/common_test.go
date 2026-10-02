@@ -40,7 +40,7 @@ func TestCommonUnlinkedMembers(t *testing.T) {
 func TestCommonAtomicFacts(t *testing.T) {
 	eachBackendDB(t, func(t *testing.T, db *gormpkg.DB) {
 		s := adapter.NewStore(db)
-		ctx := model.WithActor(t.Context(), model.Actor{URI: "urn:test:console", RequestID: "request-1"})
+		ctx := model.WithActor(t.Context(), model.Actor{URI: "urn:test:console", RequestID: "0123456789abcdef0123456789abcdef"})
 		require.NoError(t, s.Migrate(ctx))
 		tenant := model.NewTenant("facts", "Facts", "")
 		require.NoError(t, s.CreateTenant(ctx, tenant))
@@ -49,7 +49,7 @@ func TestCommonAtomicFacts(t *testing.T) {
 		require.Equal(t, int64(1), initial)
 		require.NoError(t, s.SaveTenant(ctx, model.UpdateTenant(tenant, model.WithTenantName(tenant.Name()))))
 		require.Equal(t, initial, count("mutation_audits"))
-		for _, table := range []string{"organizations", "roles", "role_permissions", "users", "memberships", "membership_roles", "events", "mutation_audits", "publications"} {
+		for _, table := range []string{"organizations", "roles", "role_permissions", "users", "memberships", "membership_roles", "events", "mutation_audits", "common_records", "publications"} {
 			t.Run(table, func(t *testing.T) {
 				sentinel := errors.New("injected write failure")
 				require.NoError(t, db.Callback().Create().Before("gorm:create").Register("fail_common", func(tx *gormpkg.DB) {
@@ -72,7 +72,7 @@ func TestCommonAtomicFacts(t *testing.T) {
 		var audit adapter.MutationAudit
 		require.NoError(t, db.First(&audit).Error)
 		require.Contains(t, audit.Actor, "urn:test:console")
-		require.Equal(t, "request-1", audit.RequestID)
+		require.Equal(t, "0123456789abcdef0123456789abcdef", audit.RequestID)
 	})
 }
 func TestCommonRolePreservesCustomAndParentStatus(t *testing.T) {
@@ -169,9 +169,14 @@ func TestCommonConcurrentOwnersAndPublication(t *testing.T) {
 		var publications []adapter.Publication
 		require.NoError(t, db.Order("sequence").Find(&publications).Error)
 		for i, p := range publications {
-			require.Equal(t, int64(i+1), p.Sequence)
+			if i > 0 {
+				require.Greater(t, p.Sequence, publications[i-1].Sequence)
+			}
+			require.NotContains(t, p.Payload, `"name"`)
 		}
-		require.Contains(t, publications[len(publications)-1].Payload, "second")
+		current, err := s.ReadCommon(ctx, model.CommonScope{Family: "tenant"}, string(tenant.ID()))
+		require.NoError(t, err)
+		require.Contains(t, string(current.Representation), "second")
 	})
 }
 func TestCommonRecovery(t *testing.T) {
