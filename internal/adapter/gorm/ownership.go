@@ -25,7 +25,13 @@ func (s *Store) checkOwnership(ctx context.Context, family string) error {
 	switch family {
 	case "domain":
 		family = "tenant_domain"
-	case "membership", "role", "invitation":
+	case "role":
+		if s.businessEnabled {
+			family = "custom_role"
+		} else {
+			family = "organization_membership"
+		}
+	case "membership", "invitation":
 		family = "organization_membership"
 	}
 	if s.ownership[family] != model.WriteAuthority(ctx) {

@@ -41,6 +41,16 @@ func NewProvisionningAPIServerFromConfig(ctx context.Context, conf *config.Confi
 	}
 
 	handler := v1.NewHandler(provisioning, build.ShortVersion)
+	if conf.BusinessResources {
+		handler.WithBusiness()
+	}
+	lifecycle, err := NewLifecycleServiceFromConfig(ctx, conf)
+	if err != nil {
+		return nil, err
+	}
+	if lifecycle != nil {
+		handler.WithLifecycle(lifecycle)
+	}
 	worker, err := NewWebhookWorkerFromConfig(ctx, conf)
 	if err != nil {
 		return nil, err

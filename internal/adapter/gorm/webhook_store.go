@@ -89,6 +89,10 @@ func (s *Store) PutWebhook(ctx context.Context, tid, id string, p model.WebhookS
 		if err != nil {
 			return err
 		}
+		if err := requireLive(db, model.CommonScope{Family: "tenant"}, tid); err != nil {
+			return err
+		}
+
 		row, err := webhookRow(db, tid, id)
 		if err != nil && !errors.Is(err, port.ErrNotFound) {
 			return err
@@ -182,6 +186,10 @@ func (s *Store) DeleteWebhook(ctx context.Context, tid, id string) error {
 		if err != nil {
 			return err
 		}
+		if err := requireLive(db, model.CommonScope{Family: "tenant"}, tid); err != nil {
+			return err
+		}
+
 		if _, err := webhookRow(db, tid, id); err != nil {
 			return err
 		}
@@ -203,6 +211,10 @@ func (s *Store) ResetWebhook(ctx context.Context, tid, id string) error {
 		if err != nil {
 			return err
 		}
+		if err := requireLive(db, model.CommonScope{Family: "tenant"}, tid); err != nil {
+			return err
+		}
+
 		if _, err := webhookRow(db, tid, id); err != nil {
 			return err
 		}

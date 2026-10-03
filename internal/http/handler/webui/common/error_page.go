@@ -29,6 +29,12 @@ func HandleError(w http.ResponseWriter, r *http.Request, err error) {
 	vmodel := component.ErrorPageVModel{}
 
 	statusCode := http.StatusInternalServerError
+	if errors.Is(err, port.ErrResourceDeleted) {
+		statusCode = http.StatusGone
+	}
+	if errors.Is(err, port.ErrLifecycleDisabled) {
+		statusCode = http.StatusConflict
+	}
 	if errors.Is(err, port.ErrNotAllowed) {
 		statusCode = http.StatusForbidden
 	}

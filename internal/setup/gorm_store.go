@@ -36,5 +36,7 @@ var getGormStoreFromConfig = createFromConfigOnce(func(ctx context.Context, conf
 	if err := store.ConfigureOwnership(conf.Ownership); err != nil {
 		return nil, err
 	}
+	store.ConfigureLifecycle(conf.Lifecycle.Enabled, conf.Lifecycle.Retention)
+	store.ConfigureBusiness(conf.BusinessResources, conf.SecretKey)
 	return store, nil
 })

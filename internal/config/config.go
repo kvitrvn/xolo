@@ -12,18 +12,20 @@ import (
 )
 
 type Config struct {
-	Ownership        model.OwnershipPolicy `env:"OWNERSHIP" envSeparator:"," envKeyValSeparator:"="`
-	Webhooks         Webhooks              `envPrefix:"WEBHOOKS_"`
-	Logger           Logger                `envPrefix:"LOGGER_"`
-	HTTP             HTTP                  `envPrefix:"HTTP_"`
-	Storage          Storage               `envPrefix:"STORAGE_"`
-	TaskRunner       TaskRunner            `envPrefix:"TASK_RUNNER_"`
-	ExchangeRate     ExchangeRateConfig    `envPrefix:"EXCHANGE_RATE_"`
-	Plugins          PluginsConfig         `envPrefix:"PLUGINS_"`
-	Proxy            ProxyConfig           `envPrefix:"PROXY_"`
-	Events           EventsConfig          `envPrefix:"EVENTS_"`
-	ProvisionningAPI ProvisionningAPI      `envPrefix:"PROVISIONNING_API_"`
-	Multitenancy     Multitenancy          `envPrefix:"MULTITENANCY_"`
+	BusinessResources bool                  `env:"BUSINESS_RESOURCES_ENABLED" envDefault:"false"`
+	Lifecycle         Lifecycle             `envPrefix:"LIFECYCLE_"`
+	Ownership         model.OwnershipPolicy `env:"OWNERSHIP" envSeparator:"," envKeyValSeparator:"="`
+	Webhooks          Webhooks              `envPrefix:"WEBHOOKS_"`
+	Logger            Logger                `envPrefix:"LOGGER_"`
+	HTTP              HTTP                  `envPrefix:"HTTP_"`
+	Storage           Storage               `envPrefix:"STORAGE_"`
+	TaskRunner        TaskRunner            `envPrefix:"TASK_RUNNER_"`
+	ExchangeRate      ExchangeRateConfig    `envPrefix:"EXCHANGE_RATE_"`
+	Plugins           PluginsConfig         `envPrefix:"PLUGINS_"`
+	Proxy             ProxyConfig           `envPrefix:"PROXY_"`
+	Events            EventsConfig          `envPrefix:"EVENTS_"`
+	ProvisionningAPI  ProvisionningAPI      `envPrefix:"PROVISIONNING_API_"`
+	Multitenancy      Multitenancy          `envPrefix:"MULTITENANCY_"`
 	// SecretKey is a 32-byte hex string used for AES-GCM encryption of provider API keys.
 	SecretKey string `env:"SECRET_KEY"`
 }
@@ -115,6 +117,9 @@ func validateSecretKey(secretKey string) error {
 }
 
 func (c *Config) Validate() error {
+	if err := c.Lifecycle.Validate(); err != nil {
+		return err
+	}
 	if err := c.Ownership.Validate(); err != nil {
 		return err
 	}

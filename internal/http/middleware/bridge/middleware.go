@@ -59,7 +59,7 @@ func Middleware(userStore port.UserStore, emitter port.EventEmitter, opts Option
 			}
 			user, err := resolve(ctx, tenant.ID(), proof)
 			if err != nil {
-				if errors.Is(err, port.ErrNotAllowed) || errors.Is(err, port.ErrAlreadyExists) {
+				if errors.Is(err, port.ErrNotAllowed) || errors.Is(err, port.ErrAlreadyExists) || errors.Is(err, port.ErrResourceDeleted) {
 					if emitter != nil {
 						emitter.Emit(ctx, model.NewEvent(model.EventSourcePlatform, model.EventTypeAuthLoginFailed,
 							model.WithEventSeverity(model.SeverityWarning), model.WithEventMessage("Échec de connexion : identité refusée"),

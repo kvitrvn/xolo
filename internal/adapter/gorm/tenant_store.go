@@ -112,46 +112,6 @@ func (s *Store) saveTenant(ctx context.Context, tenant model.Tenant) error {
 	})
 }
 
-// DeleteTenant implements port.TenantStore. It replays the organization cascade
-// for every organization the tenant owns, then removes the tenant users and the
-// rows keyed on them: users are tenant-scoped, so nothing outside this tenant
-// can reference them.
-func (s *Store) deleteTenant(ctx context.Context, id model.TenantID) error {
-	return s.withRetry(ctx, true, func(ctx context.Context, db *gorm.DB) error {
-		var exists Tenant
-		if err := db.Select("id").First(&exists, "id = ?", string(id)).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return errors.WithStack(port.ErrNotFound)
-			}
-			return errors.WithStack(err)
-		}
-
-		var orgIDs []string
-		if err := db.Model(&Organization{}).Where("tenant_id = ?", string(id)).Pluck("id", &orgIDs).Error; err != nil {
-			return errors.WithStack(err)
-		}
-		for _, orgID := range orgIDs {
-			if err := deleteOrgWithin(db, model.OrgID(orgID)); err != nil {
-				return err
-			}
-		}
-
-		// Materialized rather than kept as a subquery: the users are deleted
-		// below, which would empty the subquery before the statements that
-		// depend on it have run.
-		var userIDs []string
-		if err := db.Model(&User{}).Where("tenant_id = ?", string(id)).Pluck("id", &userIDs).Error; err != nil {
-			return errors.WithStack(err)
-		}
-
-		if _, err := deleteUsersWithin(db, userIDs); err != nil {
-			return err
-		}
-
-		return errors.WithStack(db.Delete(&Tenant{}, "id = ?", string(id)).Error)
-	})
-}
-
 func (s *Store) CreateTenant(ctx context.Context, tenant model.Tenant) error {
 	return s.mutate(ctx, "tenant", string(tenant.ID()), func(bound *Store) error { return bound.createTenant(ctx, tenant) })
 }
@@ -160,21 +120,10 @@ func (s *Store) SaveTenant(ctx context.Context, tenant model.Tenant) error {
 	return s.mutate(ctx, "tenant", string(tenant.ID()), func(bound *Store) error { return bound.saveTenant(ctx, tenant) })
 }
 
+// DeleteTenant schedules a frozen exportable scope; physical cleanup requires a receipt.
 func (s *Store) DeleteTenant(ctx context.Context, id model.TenantID) error {
-	return s.mutate(ctx, "tenant", string(id), func(bound *Store) error {
-		if err := bound.trackDependents(ctx, "tenant", string(id)); err != nil {
-			return err
-		}
-		db, err := bound.getDatabase(ctx)
-		if err != nil {
-			return err
-		}
-		if err := db.Where("tenant_id = ?", string(id)).Delete(&WebhookDelivery{}).Error; err != nil {
-			return err
-		}
-		if err := db.Where("tenant_id = ?", string(id)).Delete(&WebhookSubscription{}).Error; err != nil {
-			return err
-		}
-		return bound.deleteTenant(ctx, id)
-	})
+	if _, err := s.GetTenantByID(ctx, id); err != nil {
+		return err
+	}
+	return s.localDeletion(ctx, model.CommonScope{Family: "tenant"}, string(id))
 }

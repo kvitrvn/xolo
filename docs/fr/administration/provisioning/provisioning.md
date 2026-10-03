@@ -524,3 +524,51 @@ secrets webhook. Conserver une sauvegarde de base réellement restaurable.
    Ressources, UUID, liens, audit, source et curseurs restent intacts. Un webhook
    déjà transmis ne peut être rappelé. Retirer les overrides de propriété,
    redémarrer en autonomie et vérifier connexion, écritures locales et flux.
+
+## Cycle de vie et ressources métier (extensions)
+
+Ces extensions sont désactivées par défaut et découvertes par
+`GET /v1/xolo/extensions`, séparément du manifeste commun. Activer
+`XOLO_LIFECYCLE_ENABLED=true` seulement après mise à niveau des consommateurs :
+ils doivent accepter l’état `deleted`, relire les clés après notification et
+reconstruire leur inventaire en cas de perte d’historique. Arrêter les anciennes
+répliques et aligner la configuration de tous les writers.
+
+Le DELETE canonique d’un tenant, d’une organisation ou d’un membre renvoie 202.
+Le périmètre reste lisible, gelé, jusqu’à réception confirmée de son export et
+expiration de la rétention. Les anciennes cascades immédiates ont été retirées ;
+une suppression locale refuse avec 409 si l’extension est désactivée.
+
+1. Conserver l’ETag retourné par DELETE.
+2. Télécharger `{ressource}/deletion/export` sur le listener mTLS autorisé.
+   Vérifier `xolo-deletion/1`, périmètre, version, inventaire, nombre,
+   `complete: true` et SHA-256 des octets exacts du payload JSON.
+3. Enregistrer et relire l’archive depuis un stockage durable protégé, puis
+   envoyer `POST {ressource}/purge-confirmation`, avec l’ETag supprimé dans
+   `If-Match` et `{"export_sha256":"…"}`. Générer un fichier ne confirme rien.
+4. Suivre `GET {ressource}/deletion`. Le worker reprend après redémarrage ;
+   un échec transactionnel conserve le périmètre et le diagnostic
+   `purge_failed`. Corriger le stockage, sans modifier le reçu en base.
+
+La rétention `XOLO_LIFECYCLE_RETENTION` vaut `720h` par défaut et est fixée
+à la suppression ; `XOLO_LIFECYCLE_POLL_INTERVAL` vaut `1m`. Un parent tenant
+supplante ses descendants planifiés. Les UUID purgés restent réservés. Les
+sessions d’une identité partagée restent utilisables dans les autres tenants ;
+elles ne peuvent pas rétablir le compte supprimé. Domaines et adhésions utilisent
+un DELETE immédiat 204 avec contrôle des parents, du dernier propriétaire et
+d’`If-Match`. Une recréation reçoit un nouvel ETag.
+
+`XOLO_BUSINESS_RESOURCES_ENABLED=true` active PUT/GET/list des rôles
+personnalisés, applications, quotas, alertes et fournisseurs. Les collections
+sont sous `/v1/xolo/tenants/{tenantID}/organizations/{orgID}`, sauf
+`/v1/xolo/tenants/{tenantID}/quotas`. Elles partagent transactions, propriété
+`XOLO_OWNERSHIP`, ETags, préconditions et curseurs. Les clés fournisseur sont
+acceptées uniquement en écriture, chiffrées en stockage et exclues des événements.
+
+Le [profil complet et l’inventaire de nettoyage](https://github.com/xolo-gateway/xolo/blob/main/internal/provisionning/LIFECYCLE.md)
+décrivent les DTO, permissions, secrets, données personnelles, priorités et
+limites de restauration. Protéger séparément les clés de chiffrement ; ne pas
+rejouer sessions, jetons ou livraisons archivés. La purge signale les trous du
+flux par 410 et `history_lost`. Les requêtes déjà autorisées et notifications
+transmises ne sont pas rappelables. L’exploitant fixe et vérifie séparément
+l’expiration des exports, sauvegardes et journaux externes.

@@ -533,3 +533,48 @@ Keep a separately tested restorable database backup.
    Resources, UUIDs, identity links, audit, feed source and cursors remain intact.
    A transmitted webhook cannot be recalled. Clear ownership overrides and
    restart in local mode, then verify login, local writes and feed continuity.
+
+## Lifecycle and business resource extensions
+
+Both extensions default to disabled and are advertised through
+`GET /v1/xolo/extensions`, separately from the common manifest. Enable
+`XOLO_LIFECYCLE_ENABLED=true` only after consumers support `deleted`,
+key reconciliation and history-loss resnapshot. Stop old replicas and align
+all writer configurations before upgrading.
+
+Canonical DELETE on a tenant, organization or member returns 202. The scope
+remains readable and frozen until a durable export receipt and retention permit
+transactional purge. Old immediate parent cascades have been removed; local
+deletion returns 409 while the extension is disabled.
+
+1. Save the deleted ETag, then download `{resource}/deletion/export` over the
+   authorized mTLS listener.
+2. Verify `xolo-deletion/1`, scope, version, inventory, count, `complete: true`
+   and SHA-256 of the exact JSON payload bytes.
+3. Save and read back the archive from protected durable storage. Only then POST
+   `{resource}/purge-confirmation` with the deleted ETag in `If-Match` and
+   `{"export_sha256":"…"}`. Generating a file is not confirmation.
+4. Monitor `GET {resource}/deletion`. A failed purge rolls back and records
+   `purge_failed`; fix storage and let the worker retry, including after restart.
+
+`XOLO_LIFECYCLE_RETENTION` defaults to `720h`, fixed at scheduling;
+`XOLO_LIFECYCLE_POLL_INTERVAL` defaults to `1m`. Tenant deletion supersedes
+planned descendants. Purged UUIDs stay retired. Shared identities retain their
+sessions in other tenants without restoring deleted account access. Domains
+and memberships use immediate DELETE 204 with parent, last-owner and
+`If-Match` checks; recreation gets a new ETag.
+
+`XOLO_BUSINESS_RESOURCES_ENABLED=true` enables full PUT/GET/list for custom
+roles, applications, quotas, alerts and providers under
+`/v1/xolo/tenants/{tenantID}/organizations/{orgID}`, except tenant-level
+`/v1/xolo/tenants/{tenantID}/quotas`. They share transactions,
+`XOLO_OWNERSHIP`, ETags, preconditions and cursors. Provider credentials are
+write-only, encrypted in storage and excluded from events.
+
+The [complete profile and cleanup inventory](https://github.com/xolo-gateway/xolo/blob/main/internal/provisionning/LIFECYCLE.md)
+specify fields, permissions, secrets, personal data, priorities and restoration
+limits. Protect encryption keys separately; never replay archived sessions,
+tokens or deliveries. Feed gaps return 410 and set `history_lost`.
+Already authorized requests and transmitted notifications cannot be recalled.
+Operators must separately define and verify archive, backup and external-log
+expiration.

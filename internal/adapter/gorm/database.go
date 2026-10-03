@@ -394,6 +394,8 @@ func createGetDatabase(db *gorm.DB) func(ctx context.Context) (*gorm.DB, error) 
 					{ID: "202610020002", Migrate: migrateCommonReads},
 					{ID: "202610020003", Migrate: migrateWebhooks},
 					{ID: "202610030001", Migrate: migrateIdentitySessions},
+					{ID: "202610030002", Migrate: migrateLifecycle},
+					{ID: "202610030003", Migrate: migrateBusiness},
 				})
 
 				m.InitSchema(func(tx *gorm.DB) error {
@@ -459,7 +461,13 @@ func createGetDatabase(db *gorm.DB) func(ctx context.Context) (*gorm.DB, error) 
 						if err := migrateWebhooks(tx); err != nil {
 							return err
 						}
-						return migrateIdentitySessions(tx)
+						if err := migrateIdentitySessions(tx); err != nil {
+							return err
+						}
+						if err := migrateLifecycle(tx); err != nil {
+							return err
+						}
+						return migrateBusiness(tx)
 					})
 				})
 

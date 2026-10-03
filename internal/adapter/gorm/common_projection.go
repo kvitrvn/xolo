@@ -75,7 +75,10 @@ func migrateCommonReads(db *gorm.DB) error {
 				return err
 			}
 			var timestamp struct{ UpdatedAt time.Time }
-			if kind != "domain" {
+			// Memberships have CreatedAt only. Their first public validator is
+			// assigned at migration, as for domains; reading updated_at would
+			// break upgrades of any instance with an existing membership.
+			if kind != "domain" && kind != "membership" {
 				if err := db.Table(resourceTables[kind]).Select("updated_at").Where(col+" = ?", id).Scan(&timestamp).Error; err != nil {
 					return err
 				}
@@ -92,6 +95,9 @@ func migrateCommonReads(db *gorm.DB) error {
 	return nil
 }
 func commonProjection(db *gorm.DB, key mutationKey, raw []byte) (*CommonRecord, error) {
+	if model.IsBusinessFamily(businessFamily(key.kind)) {
+		return businessProjection(db, key, raw)
+	}
 	if key.kind != "tenant" && key.kind != "organization" && key.kind != "member" && key.kind != "domain" && key.kind != "membership" {
 		return nil, nil
 	}
@@ -194,7 +200,8 @@ func (r CommonRecord) item() (model.CommonItem, error) {
 
 // publishCommon constructs the closed public profile from validated references,
 // never from arbitrary audit attributes. Only this transaction path inserts it.
-func publishCommon(ctx context.Context, db *gorm.DB, key mutationKey, before, after []byte, put bool) error {
+func publishCommon(ctx context.Context, db *gorm.DB, key mutationKey, before, after []byte, put, business bool) error {
+
 	rec, err := commonProjection(db, key, after)
 	if err != nil {
 		return err
@@ -206,9 +213,12 @@ func publishCommon(ctx context.Context, db *gorm.DB, key mutationKey, before, af
 			if err := json.Unmarshal(before, &old); err != nil {
 				return err
 			}
-			family := key.kind
+			family := businessFamily(key.kind)
 			id := key.id
 			org := ""
+			if model.IsBusinessFamily(family) && family != "quota" {
+				org, _ = old["org_id"].(string)
+			}
 			if family == "domain" {
 				family = "tenant_domain"
 			}
@@ -216,6 +226,23 @@ func publishCommon(ctx context.Context, db *gorm.DB, key mutationKey, before, af
 				family = "organization_membership"
 				id, _ = old["user_id"].(string)
 				org, _ = old["org_id"].(string)
+			}
+			var previous CommonRecord
+			query := db.Where("family = ? AND key = ? AND organization_id = ?", family, id, org)
+			if err := query.First(&previous).Error; err != nil {
+				if err == gorm.ErrRecordNotFound {
+					return nil
+				}
+				return err
+			}
+			item, err := previous.item()
+			if err != nil {
+				return err
+			}
+			if !model.IsBusinessFamily(family) || business {
+				if err := publishExtension(ctx, db, family, item, "deleted"); err != nil {
+					return err
+				}
 			}
 			return db.Where("family = ? AND key = ? AND organization_id = ?", family, id, org).Delete(&CommonRecord{}).Error
 		}
@@ -226,7 +253,18 @@ func publishCommon(ctx context.Context, db *gorm.DB, key mutationKey, before, af
 	if err != nil && err != gorm.ErrRecordNotFound {
 		return err
 	}
-	if err == nil && previous.Representation == rec.Representation {
+	credentialChanged := false
+	if key.kind == "provider" {
+		var a, b map[string]any
+		if err := json.Unmarshal(before, &a); err != nil {
+			return err
+		}
+		if err := json.Unmarshal(after, &b); err != nil {
+			return err
+		}
+		credentialChanged = a["api_key"] != b["api_key"]
+	}
+	if err == nil && previous.Representation == rec.Representation && !credentialChanged {
 		return nil
 	}
 	var old map[string]any
@@ -239,8 +277,19 @@ func publishCommon(ctx context.Context, db *gorm.DB, key mutationKey, before, af
 		}
 	}
 	rec.UpdatedAt = db.NowFunc().UTC().Truncate(time.Microsecond)
+	if model.IsBusinessFamily(rec.Family) && !rec.UpdatedAt.After(previous.UpdatedAt) {
+		rec.UpdatedAt = previous.UpdatedAt.Add(time.Microsecond)
+	}
+	if rec.Family == "tenant_domain" || rec.Family == "organization_membership" {
+		if err := advanceLeafVersion(db, rec); err != nil {
+			return err
+		}
+	}
 	if err := db.Clauses(clause.OnConflict{UpdateAll: true}).Create(rec).Error; err != nil {
 		return err
+	}
+	if model.IsBusinessFamily(rec.Family) && !business {
+		return nil
 	}
 	types := []string{"updated"}
 	if previous.Family == "" {
@@ -248,7 +297,7 @@ func publishCommon(ctx context.Context, db *gorm.DB, key mutationKey, before, af
 		if !put && rec.Family == "organization_membership" {
 			types = []string{"granted"}
 		}
-	} else if !put {
+	} else if !put && !model.IsBusinessFamily(rec.Family) {
 		var a, b map[string]any
 		if err := json.Unmarshal([]byte(previous.Representation), &a); err != nil {
 			return err
@@ -324,11 +373,11 @@ func validateCommonScope(scope model.CommonScope, key string) error {
 		if scope.TenantID != "" || scope.OrganizationID != "" {
 			return port.ErrInvalid
 		}
-	case "organization", "member", "tenant_domain":
+	case "organization", "member", "tenant_domain", "quota":
 		if scope.TenantID == "" || scope.OrganizationID != "" {
 			return port.ErrInvalid
 		}
-	case "organization_membership":
+	case "organization_membership", "custom_role", "application", "alert", "provider":
 		if scope.TenantID == "" || scope.OrganizationID == "" {
 			return port.ErrInvalid
 		}
@@ -336,7 +385,11 @@ func validateCommonScope(scope model.CommonScope, key string) error {
 		return port.ErrInvalid
 	}
 	if key != "" {
-		if scope.Family == "tenant_domain" {
+		if model.IsBusinessFamily(scope.Family) {
+			if !businessKey(key) {
+				return port.ErrInvalid
+			}
+		} else if scope.Family == "tenant_domain" {
 			host, err := model.NormalizeHostname(key)
 			if err != nil || host != key {
 				return port.ErrInvalidHostname
@@ -410,6 +463,9 @@ func (s *Store) WriteCommon(ctx context.Context, scope model.CommonScope, key st
 	err := s.identityTransaction(ctx, func(tx *Store) error {
 		db, err := tx.getDatabase(ctx)
 		if err != nil {
+			return err
+		}
+		if err := requireLive(db, scope, key); err != nil {
 			return err
 		}
 		old, readErr := readCommon(db, scope, key)

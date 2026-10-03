@@ -28,7 +28,7 @@ func (s *Store) ExportAdoption(ctx context.Context) ([]byte, error) {
 			return err
 		}
 		var rows []CommonRecord
-		if err := db.Order("family, tenant_id, organization_id, key").Find(&rows).Error; err != nil {
+		if err := db.Where("family IN ?", adoption.Families).Order("family, tenant_id, organization_id, key").Find(&rows).Error; err != nil {
 			return err
 		}
 		payload := adoption.Payload{Source: feed.Source, Cursor: cursor, Records: []adoption.Record{}}

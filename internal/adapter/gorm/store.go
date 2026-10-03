@@ -12,10 +12,13 @@ import (
 )
 
 type Store struct {
-	identityProviders map[string]string
-	ownership         model.OwnershipPolicy
-	mutations         *mutationState
-	getDatabase       func(ctx context.Context) (*gorm.DB, error)
+	lifecycleRetention *time.Duration
+	businessEnabled    bool
+	businessSecretKey  string
+	identityProviders  map[string]string
+	ownership          model.OwnershipPolicy
+	mutations          *mutationState
+	getDatabase        func(ctx context.Context) (*gorm.DB, error)
 	// Use-case callbacks own the transaction and the retry boundary: on a
 	// transaction-bound store, withRetry runs fn exactly once
 	// on that transaction and never opens its own.
@@ -68,7 +71,7 @@ func (s *Store) withRetry(ctx context.Context, withTx bool, fn func(ctx context.
 				continue
 			}
 
-			return errors.WithStack(err)
+			return errors.WithStack(lifecycleError(err))
 		}
 
 		return nil

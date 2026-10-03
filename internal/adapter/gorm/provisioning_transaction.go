@@ -91,14 +91,14 @@ func (s *Store) identityTransaction(ctx context.Context, fn func(*Store) error) 
 				return fmt.Errorf("missing publication clock")
 			}
 			tx = tx.Session(&gorm.Session{SkipDefaultTransaction: true})
-			bound := &Store{identityProviders: s.identityProviders, ownership: s.ownership, getDatabase: func(context.Context) (*gorm.DB, error) { return tx, nil }, transactionBound: true, mutations: &mutationState{before: map[mutationKey][]byte{}, actor: actor, commonPUT: model.IsCommonPUT(ctx)}}
+			bound := &Store{lifecycleRetention: s.lifecycleRetention, businessEnabled: s.businessEnabled, businessSecretKey: s.businessSecretKey, identityProviders: s.identityProviders, ownership: s.ownership, getDatabase: func(context.Context) (*gorm.DB, error) { return tx, nil }, transactionBound: true, mutations: &mutationState{before: map[mutationKey][]byte{}, actor: actor, commonPUT: model.IsCommonPUT(ctx)}}
 			if err := fn(bound); err != nil {
 				return err
 			}
 			return bound.flushMutations(ctx, tx)
 		})
 		if err == nil || !isRetryableError(err) || attempt >= 10 {
-			return err
+			return lifecycleError(err)
 		}
 		timer := time.NewTimer(min(10*time.Millisecond<<attempt, 500*time.Millisecond))
 		select {
@@ -143,7 +143,7 @@ func (s *Store) track(ctx context.Context, kind, id string) error {
 	return nil
 }
 
-var resourceTables = map[string]string{"tenant": "tenants", "organization": "organizations", "member": "users", "membership": "memberships", "role": "roles", "domain": "domains", "invitation": "invite_tokens"}
+var resourceTables = map[string]string{"tenant": "tenants", "organization": "organizations", "member": "users", "membership": "memberships", "role": "roles", "domain": "domains", "invitation": "invite_tokens", "application": "applications", "quota": "quota", "alert": "alerts", "provider": "providers"}
 
 func mutationSnapshot(db *gorm.DB, key mutationKey) ([]byte, error) {
 	table, ok := resourceTables[key.kind]
@@ -204,6 +204,9 @@ func mutationSnapshot(db *gorm.DB, key mutationKey) ([]byte, error) {
 		}
 		row["grants"] = grants
 	}
+	if err := businessSnapshot(db, key, row); err != nil {
+		return nil, err
+	}
 	return json.Marshal(row)
 }
 func (s *Store) flushMutations(ctx context.Context, db *gorm.DB) error {
@@ -259,7 +262,7 @@ func (s *Store) flushMutations(ctx context.Context, db *gorm.DB) error {
 		if err := db.Create(&audit).Error; err != nil {
 			return err
 		}
-		if err := publishCommon(ctx, db, key, before, after, s.mutations.commonPUT); err != nil {
+		if err := publishCommon(ctx, db, key, before, after, s.mutations.commonPUT, s.businessEnabled); err != nil {
 			return err
 		}
 	}
@@ -422,58 +425,6 @@ func recordMutationEvent(ctx context.Context, db *gorm.DB, key mutationKey, befo
 			assigned := model.NewEvent(model.EventSourcePlatform, model.EventTypeMemberUpdated, model.WithEventOrg(model.OrgID(str("org_id"))), model.WithEventAttributes(attrs), model.WithEventMessage("Rôles de membre attribués"))
 			return db.Create(fromEvent(assigned)).Error
 		}
-	}
-	return nil
-}
-
-func (s *Store) trackDependents(ctx context.Context, kind, id string) error {
-	db, err := s.getDatabase(ctx)
-	if err != nil {
-		return err
-	}
-	trackIDs := func(table, resource, column string) error {
-		var ids []string
-		if err := db.Table(table).Where(column+" = ?", id).Order("id").Pluck("id", &ids).Error; err != nil {
-			return err
-		}
-		for _, child := range ids {
-			if err := s.track(ctx, resource, child); err != nil {
-				return err
-			}
-			if resource == "organization" || resource == "member" {
-				if err := s.trackDependents(ctx, resource, child); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	}
-	switch kind {
-	case "member":
-		return trackIDs("memberships", "membership", "user_id")
-	case "organization":
-		for table, resource := range map[string]string{"memberships": "membership", "roles": "role", "invite_tokens": "invitation"} {
-			if err := trackIDs(table, resource, "org_id"); err != nil {
-				return err
-			}
-		}
-	case "tenant":
-		if err := trackIDs("organizations", "organization", "tenant_id"); err != nil {
-			return err
-		}
-		if err := trackIDs("users", "member", "tenant_id"); err != nil {
-			return err
-		}
-		var domains []Domain
-		if err := db.Where("tenant_id = ?", id).Find(&domains).Error; err != nil {
-			return err
-		}
-		for _, d := range domains {
-			if err := s.track(ctx, "domain", d.Hostname); err != nil {
-				return err
-			}
-		}
-		return db.Where("tenant_id = ?", id).Delete(&Domain{}).Error
 	}
 	return nil
 }

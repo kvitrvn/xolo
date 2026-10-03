@@ -215,7 +215,7 @@ func (s *Store) ListMembershipRoles(ctx context.Context, membershipID model.Memb
 
 // SetApplicationRoles implements port.RoleStore. It replaces the full set of
 // roles assigned to an application.
-func (s *Store) SetApplicationRoles(ctx context.Context, appID model.ApplicationID, roleIDs []model.RoleID) error {
+func (s *Store) setApplicationRoles(ctx context.Context, appID model.ApplicationID, roleIDs []model.RoleID) error {
 	return s.withRetry(ctx, true, func(ctx context.Context, db *gorm.DB) error {
 		if err := db.Where("application_id = ?", string(appID)).Delete(&ApplicationRole{}).Error; err != nil {
 			return errors.WithStack(err)
@@ -429,9 +429,34 @@ func (s *Store) SaveRole(ctx context.Context, role model.Role) error {
 }
 
 func (s *Store) DeleteRole(ctx context.Context, id model.RoleID) error {
-	return s.mutate(ctx, "role", string(id), func(bound *Store) error { return bound.deleteRole(ctx, id) })
+	return s.mutate(ctx, "role", string(id), func(bound *Store) error {
+		db, _ := bound.getDatabase(ctx)
+		var memberships []string
+		if err := db.Table("membership_roles").Where("role_id = ?", string(id)).Pluck("membership_id", &memberships).Error; err != nil {
+			return err
+		}
+		for _, membership := range memberships {
+			if err := bound.track(ctx, "membership", membership); err != nil {
+				return err
+			}
+		}
+		var apps []string
+		if err := db.Table("application_roles").Where("role_id = ?", string(id)).Pluck("application_id", &apps).Error; err != nil {
+			return err
+		}
+		for _, app := range apps {
+			if err := bound.track(ctx, "application", app); err != nil {
+				return err
+			}
+		}
+		return bound.deleteRole(ctx, id)
+	})
 }
 
 func (s *Store) SetMembershipRoles(ctx context.Context, membershipID model.MembershipID, roleIDs []model.RoleID) error {
 	return s.mutate(ctx, "membership", string(membershipID), func(bound *Store) error { return bound.setMembershipRoles(ctx, membershipID, roleIDs) })
+}
+
+func (s *Store) SetApplicationRoles(ctx context.Context, appID model.ApplicationID, roleIDs []model.RoleID) error {
+	return s.mutate(ctx, "application", string(appID), func(bound *Store) error { return bound.setApplicationRoles(ctx, appID, roleIDs) })
 }

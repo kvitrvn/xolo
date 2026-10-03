@@ -10,6 +10,7 @@ import (
 
 // CommonKey identifies a resource independently of its mutable representation.
 type CommonKey struct {
+	ResourceID     string `json:"resource_id,omitempty"`
 	TenantID       string `json:"tenant_id"`
 	OrganizationID string `json:"organization_id,omitempty"`
 	MemberID       string `json:"member_id,omitempty"`

@@ -26,6 +26,8 @@ const (
 // provisioning service, converts the result to an API representation and maps
 // domain errors to HTTP statuses. It holds no store and no business rule.
 type Handler struct {
+	businessEnabled bool
+	lifecycle       *service.LifecycleService
 	webhooksEnabled bool
 	provisioning    *service.ProvisioningService
 	mux             *http.ServeMux

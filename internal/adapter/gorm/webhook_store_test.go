@@ -122,7 +122,7 @@ func TestWebhookHistoryLossBackpressureAndScope(t *testing.T) {
 		require.Greater(t, sub.Position, position)
 		require.NoError(t, s.SaveTenant(ctx, model.UpdateTenant(tenant, model.WithTenantName("after reset"))))
 		require.NoError(t, s.PrepareWebhooks(ctx, 100))
-		require.NoError(t, s.DeleteTenant(ctx, tenant.ID()))
+		require.NoError(t, deleteAndPurgeTenant(t, s, tenant.ID()))
 		var n int64
 		require.NoError(t, db.Model(&adapter.WebhookDelivery{}).Count(&n).Error)
 		require.Zero(t, n)

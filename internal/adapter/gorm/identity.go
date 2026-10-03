@@ -48,9 +48,21 @@ func (s *Store) SaveAuthenticatedUser(ctx context.Context, u model.User) error {
 	if s.mutations == nil {
 		return port.ErrNotAllowed
 	}
+	db, err := s.getDatabase(ctx)
+	if err != nil {
+		return err
+	}
+	if err := requireLive(db, model.CommonScope{Family: "member", TenantID: string(u.TenantID())}, string(u.ID())); err != nil {
+		return err
+	}
 	old, err := s.GetUserByID(ctx, u.ID())
 	if err != nil && !errors.Is(err, port.ErrNotFound) {
 		return err
+	}
+	if old == nil {
+		if err := s.checkRetiredLogin(ctx, u); err != nil {
+			return err
+		}
 	}
 	if old != nil {
 		a, b := fromUser(old), fromUser(u)

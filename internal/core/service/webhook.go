@@ -41,6 +41,22 @@ type webhookCredentials struct {
 }
 
 func ValidWebhookEvent(typ string) bool {
+	for _, family := range []string{"tenant", "organization", "member"} {
+		for _, action := range []string{"deleted", "export_confirmed", "purged"} {
+			if typ == family+"."+action+".v1" {
+				return true
+			}
+		}
+	}
+	for _, family := range []string{"tenant_domain", "organization_membership", "custom_role", "application", "quota", "alert", "provider"} {
+		if typ == family+".deleted.v1" {
+			return true
+		}
+		if model.IsBusinessFamily(family) && (typ == family+".created.v1" || typ == family+".updated.v1") {
+			return true
+		}
+	}
+
 	if typ == "*" {
 		return true
 	}

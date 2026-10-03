@@ -186,6 +186,7 @@ func TestCommonRecovery(t *testing.T) {
 				ctx := t.Context()
 				s := adapter.NewStore(db)
 				require.NoError(t, s.Migrate(ctx))
+				removeLifecycleTestGuards(t, db)
 				// Simulate the previous release with actual xid keys, foreign keys enabled,
 				// an optional provider identity and a personal secret scope.
 				tenantID, orgID, userID := xid.New().String(), xid.New().String(), xid.New().String()
@@ -357,6 +358,7 @@ func TestCommonLastOrganizationOwner(t *testing.T) {
 		require.NoError(t, s.SetCommonMembership(ctx, org.ID(), user.ID(), model.MembershipRoleOwner, model.StatusActive))
 		require.ErrorIs(t, s.SetCommonMembership(ctx, org.ID(), user.ID(), model.MembershipRoleMember, model.StatusActive), port.ErrNotAllowed)
 		require.ErrorIs(t, s.SetCommonMembership(ctx, org.ID(), user.ID(), model.MembershipRoleOwner, model.StatusSuspended), port.ErrNotAllowed)
+		s.ConfigureLifecycle(true, time.Second)
 		require.ErrorIs(t, s.DeleteUser(ctx, user.ID()), port.ErrNotAllowed)
 		member, err := s.GetUserOrgMembership(ctx, user.ID(), org.ID())
 		require.NoError(t, err)

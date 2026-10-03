@@ -533,3 +533,12 @@ Keep a separately tested restorable database backup.
    Resources, UUIDs, identity links, audit, feed source and cursors remain intact.
    A transmitted webhook cannot be recalled. Clear ownership overrides and
    restart in local mode, then verify login, local writes and feed continuity.
+
+### Lifecycle and business extensions
+
+See [the version 1 profiles and operating procedure](LIFECYCLE.md) for optional
+parent freeze/export/receipt/purge, immediate leaf deletion, and the five business
+resource families. Both extensions default to disabled and are advertised only
+through extension discovery. Old local parent cascades have been removed.
+The profile documents the storage inventory, shared identities, retention,
+recovery, credentials, publication gaps and external-copy limits.

@@ -12,7 +12,7 @@ const (
 	OwnerControlPlane Owner = "control_plane"
 )
 
-var OwnershipFamilies = []string{"tenant", "organization", "member", "tenant_domain", "organization_membership", "subscription"}
+var OwnershipFamilies = []string{"tenant", "organization", "member", "tenant_domain", "organization_membership", "subscription", "custom_role", "application", "quota", "alert", "provider"}
 
 type OwnershipPolicy map[string]Owner
 

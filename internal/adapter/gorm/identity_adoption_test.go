@@ -355,6 +355,7 @@ func TestOwnershipBlocksForeignFamilyCascade(t *testing.T) {
 		u := model.NewUser(tenant.ID(), "local", "subject", "u@test", "User", true)
 		require.NoError(t, s.SaveUser(ctx, u))
 		require.NoError(t, s.ConfigureOwnership(model.OwnershipPolicy{"member": "control_plane"}))
+		s.ConfigureLifecycle(true, time.Second)
 		require.ErrorIs(t, s.DeleteTenant(ctx, tenant.ID()), port.ErrOwnershipDenied)
 		_, err := s.GetTenantByID(ctx, tenant.ID())
 		require.NoError(t, err)
