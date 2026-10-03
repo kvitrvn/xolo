@@ -309,7 +309,7 @@ func TestCommonProjectionUpgradeAndClock(t *testing.T) {
 		require.NoError(t, s.SetCommonMembership(ctx, org.ID(), uid, model.MembershipRoleMember, model.StatusActive))
 		require.False(t, db.Migrator().HasColumn(&adapter.Membership{}, "updated_at"))
 		require.NoError(t, s.SaveDomain(ctx, model.Domain{Hostname: "upgrade.example.test", TenantID: tenant.ID(), Status: "active"}))
-		// Model the previously installed lot-2 schema, with internal outbox data.
+		// Model the schema before migration 202610020002, with internal outbox data.
 		require.NoError(t, db.Migrator().DropTable(&adapter.CommonRecord{}, &adapter.CommonFeed{}))
 		require.NoError(t, db.Exec("DELETE FROM migrations WHERE id = ?", "202610020002").Error)
 		restarted := adapter.NewStore(db)

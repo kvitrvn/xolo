@@ -98,8 +98,8 @@ func TestPlatformNavGroups(t *testing.T) {
 		t.Errorf("group titles: got %v, want %v", got, want)
 	}
 
-	// Both supervision entries got a route in lot 3; the overview lands on the
-	// console root, which used to redirect to the organisation list.
+	// Both supervision entries have a route; the overview lands on the
+	// console root.
 	overview, ok := findEntry(groups, "Vue d'ensemble")
 	if !ok {
 		t.Fatal(`expected a "Vue d'ensemble" entry`)

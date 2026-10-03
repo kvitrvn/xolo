@@ -5,8 +5,9 @@ five complete PUT operations, unit reads, lists and the event feed. It shares tr
 server but has its own TLS configuration. The public OpenAI-compatible `/v1/`
 proxy is unaffected.
 
-Lots 1–5 are implemented, including optional durable webhooks. The manifest
-identifies the targeted contract; it is not a claim of complete conformance.
+The API also supports optional durable webhooks, identity management, session
+revocation, ownership and adoption. The manifest identifies the targeted
+contract; it is not a claim of complete conformance.
 
 ## Configuration and authority
 
@@ -161,7 +162,7 @@ correctness over concurrent identity-write throughput; no background publisher
 or `MAX(sequence)` heuristic is used.
 
 Retention is **unlimited by default**, with no automatic purge or environment
-setting in this lot. The store maintenance method
+setting for it. The store maintenance method
 `PurgeCommonEvents(ctx, before)` removes only a settled prefix older than the
 UTC cutoff and persists the last removed event position, even after complete
 purge. It cannot remove a recent earlier sequence merely because a later clock
@@ -180,7 +181,8 @@ protection against a compromised application credential is claimed.
 
 Physical deletion through existing Xolo extensions is outside this draft's
 no-deletion synchronization profile. Such a deletion must not be interpreted
-as a common tombstone; lifecycle events and recovery belong to the later lot.
+as a common tombstone; lifecycle events and recovery are defined by the optional
+Xolo lifecycle extension described below.
 
 ## Persistent host routing
 
@@ -352,7 +354,7 @@ checkpoint. A reset discards all subscription delivery rows and starts new
 notifications at the current horizon. Tenant deletion also removes its
 subscriptions and materialized deliveries in the same transaction. Organization
 and member lifecycle reconciliation remains outside the common no-deletion
-profile; future scoped cleanup can use each delivery's tenant/subscription key.
+profile; the Xolo lifecycle extension defines scoped cleanup.
 
 Operational targets at default settings are materialization and first attempt
 within a few seconds when healthy, without a throughput or latency SLA.

@@ -36,7 +36,7 @@ type MutationAudit struct {
 }
 
 // Publication is the closed common CloudEvent outbox, independent of the local
-// audit event ring buffer. Delivery is supplied by the webhook lot.
+// audit event ring buffer. Delivery is handled by the optional webhook worker.
 type Publication struct {
 	TenantID   string `gorm:"index"`
 	OrgID      string `gorm:"index"`

@@ -43,7 +43,7 @@ func migrateCommonReads(db *gorm.DB) error {
 	if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&feed).Error; err != nil {
 		return err
 	}
-	// Lot 1/2 outbox rows contain internal snapshots, not public CloudEvents.
+	// Legacy outbox rows contain internal snapshots, not public CloudEvents.
 	// A fresh feed starts after these historical facts; lists recover all state.
 	var clock PublicationClock
 	if err := db.First(&clock, 1).Error; err != nil {

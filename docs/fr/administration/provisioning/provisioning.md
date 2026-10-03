@@ -3,9 +3,9 @@
 L'API utilise un listener HTTPS dédié, distinct du proxy public `/v1/`.
 Elle expose le manifeste et les cinq PUT du contrat App Covenant
 `0.1.0-draft.1`, ainsi que les lectures communes, ETags, préconditions, listes
-et flux de synchronisation des lots 1 à 3. Le lot 4 ajoute les webhooks durables
-facultatifs ; le lot 5 ajoute identité, révocation de sessions, propriété et
-adoption. Cette version ne revendique pas une conformité complète au contrat.
+et flux de synchronisation. Elle propose aussi des webhooks durables
+facultatifs, la gestion des identités, la révocation de sessions, la propriété
+et l'adoption. Cette version ne revendique pas une conformité complète au contrat.
 
 ## Configuration et certificats
 
@@ -207,7 +207,7 @@ débit des écritures d'identité ; aucun publisher asynchrone ni calcul fondé 
 `MAX(sequence)` n'est nécessaire.
 
 La rétention est **illimitée par défaut**, sans purge automatique ni variable
-d'environnement dans ce lot. La méthode de maintenance du store
+d'environnement dédiée. La méthode de maintenance du store
 `PurgeCommonEvents(ctx, before)` retire seulement un préfixe résolu antérieur
 au seuil UTC. Elle persiste la position du dernier événement supprimé, même
 après purge complète. Un retour en arrière de l'horloge ne permet pas de
@@ -227,7 +227,8 @@ revendiquée.
 
 Les suppressions physiques des extensions Xolo restent hors du profil commun
 sans suppression. Un 404 consécutif ne constitue pas un tombstone implicite ;
-le protocole de cycle de vie relève d'un lot ultérieur.
+les événements et la reprise associés sont définis par l'extension Xolo
+facultative de cycle de vie décrite plus bas.
 
 ## Webhooks durables — extension Xolo
 
@@ -349,7 +350,7 @@ checkpoint propre au consommateur. Le reset efface toutes les livraisons de
 l’abonnement et repart de l’horizon courant. La suppression d’un tenant retire
 aussi ses abonnements et livraisons dans la même transaction. Le cycle de vie
 des organisations et membres reste hors du profil commun sans suppression ;
-les clés tenant/abonnement préparent le nettoyage par périmètre des lots suivants.
+l'extension Xolo de cycle de vie définit le nettoyage par périmètre.
 
 À configuration par défaut, l’objectif est une première tentative en quelques
 secondes lorsque le système est sain, sans SLA de débit ou de latence.
