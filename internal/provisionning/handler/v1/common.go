@@ -7,6 +7,9 @@ import (
 	"mime"
 	"net/http"
 	"unicode/utf8"
+
+	"github.com/xolo-gateway/xolo/internal/core/model"
+	"github.com/xolo-gateway/xolo/internal/core/service"
 )
 
 const ContractVersion = "0.1.0-draft.1"
@@ -46,6 +49,16 @@ func decodeCommon(w http.ResponseWriter, r *http.Request, required []string, opt
 		if bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
 			writeError(w, 400, "invalid_representation", "null fields are not allowed")
 			return nil, false
+		}
+		if k == "identity" {
+			var identity model.Identity
+			var fields map[string]json.RawMessage
+			if json.Unmarshal(v, &fields) != nil || len(fields) != 2 || fields["issuer"] == nil || fields["subject"] == nil || !validJSONString(fields["issuer"]) || !validJSONString(fields["subject"]) || json.Unmarshal(v, &identity) != nil || service.ValidateIdentity(&identity) != nil {
+				writeError(w, 400, "invalid_representation", "invalid identity")
+				return nil, false
+			}
+			values[k] = string(v)
+			continue
 		}
 		var text string
 		if json.Unmarshal(v, &text) != nil {

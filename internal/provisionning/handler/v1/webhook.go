@@ -13,9 +13,7 @@ import (
 // remain behind the dedicated listener's instance-wide certificate authority.
 func (h *Handler) WithWebhooks(s *service.WebhookService) *Handler {
 	const path = "/v1/xolo/tenants/{tenantID}/webhooks"
-	h.mux.HandleFunc("GET /v1/xolo/extensions", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]any{"extensions": []any{map[string]any{"name": "webhooks", "version": "1", "scope": "tenant", "owner": "instance", "path": "/v1/xolo/tenants/{tenantID}/webhooks"}}})
-	})
+	h.webhooksEnabled = true
 	h.mux.HandleFunc("GET /v1/xolo/webhooks/status", func(w http.ResponseWriter, r *http.Request) {
 		stats, err := s.Stats(r.Context())
 		if err != nil {

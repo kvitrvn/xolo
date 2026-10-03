@@ -26,9 +26,10 @@ const (
 // provisioning service, converts the result to an API representation and maps
 // domain errors to HTTP statuses. It holds no store and no business rule.
 type Handler struct {
-	provisioning *service.ProvisioningService
-	mux          *http.ServeMux
-	version      string
+	webhooksEnabled bool
+	provisioning    *service.ProvisioningService
+	mux             *http.ServeMux
+	version         string
 }
 
 func NewHandler(provisioning *service.ProvisioningService, version ...string) *Handler {
@@ -42,6 +43,8 @@ func NewHandler(provisioning *service.ProvisioningService, version ...string) *H
 		h.version = version[0]
 	}
 	h.mux.HandleFunc("GET /v1/manifest", h.handleManifest)
+	h.mux.HandleFunc("GET /v1/xolo/extensions", h.handleExtensions)
+	h.mux.HandleFunc("GET /v1/xolo/export", h.handleExport)
 	h.mux.HandleFunc("PUT /v1/tenants/{tenantID}", h.handleCommonPut)
 	h.mux.HandleFunc("PUT /v1/tenants/{tenantID}/domains/{hostname}", h.handleCommonPut)
 	h.mux.HandleFunc("PUT /v1/tenants/{tenantID}/organizations/{orgID}", h.handleCommonPut)
@@ -89,6 +92,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleNotFound(w, r)
 		return
 	}
+	r = r.WithContext(model.WithWriteAuthority(r.Context(), model.OwnerControlPlane))
 	h.mux.ServeHTTP(w, r)
 }
 

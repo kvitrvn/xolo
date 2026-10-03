@@ -101,10 +101,11 @@ func call(t *testing.T, store port.UserStore, opts bridge.Options, identity *aut
 
 func newIdentity(subject, email, displayName string) *authn.User {
 	return &authn.User{
-		Provider:    "openid-connect",
-		Subject:     subject,
-		Email:       email,
-		DisplayName: displayName,
+		Provider:      "openid-connect",
+		EmailVerified: true,
+		Subject:       subject,
+		Email:         email,
+		DisplayName:   displayName,
 	}
 }
 

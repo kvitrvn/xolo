@@ -33,5 +33,8 @@ var getGormStoreFromConfig = createFromConfigOnce(func(ctx context.Context, conf
 	if err := store.InitializeDomainRouting(ctx, pattern, conf.Multitenancy.DefaultTenantSlug); err != nil {
 		return nil, errors.Wrap(err, "initialize explicit tenant domains")
 	}
+	if err := store.ConfigureOwnership(conf.Ownership); err != nil {
+		return nil, err
+	}
 	return store, nil
 })

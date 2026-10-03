@@ -21,7 +21,14 @@ func NewUserID() UserID {
 	return UserID(uuid.NewString())
 }
 
+type Identity struct {
+	Issuer  string `json:"issuer"`
+	Subject string `json:"subject"`
+}
+
+// DeclaredIdentity is tenant-scoped; authenticated links remain independent.
 type User interface {
+	DeclaredIdentity() *Identity
 	TenantRole() TenantRole
 	WithID[UserID]
 
@@ -45,6 +52,7 @@ type User interface {
 }
 
 type BaseUser struct {
+	identity    *Identity
 	tenantRole  TenantRole
 	id          UserID
 	tenantID    TenantID
@@ -106,6 +114,7 @@ var _ User = &BaseUser{}
 
 func CopyUser(user User) *BaseUser {
 	return &BaseUser{
+		identity:    user.DeclaredIdentity(),
 		id:          user.ID(),
 		tenantRole:  user.TenantRole(),
 		tenantID:    user.TenantID(),
@@ -273,3 +282,18 @@ func (u *BaseUser) SetIdentity(provider, subject string) { u.provider, u.subject
 
 // SetID accepts a validated external UUID; callers should use ParseUserID first.
 func (u *BaseUser) SetID(id UserID) { u.id = id }
+
+func (u *BaseUser) DeclaredIdentity() *Identity {
+	if u.identity == nil {
+		return nil
+	}
+	v := *u.identity
+	return &v
+}
+func (u *BaseUser) SetDeclaredIdentity(v *Identity) {
+	u.identity = nil
+	if v != nil {
+		c := *v
+		u.identity = &c
+	}
+}

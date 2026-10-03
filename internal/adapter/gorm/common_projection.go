@@ -137,7 +137,7 @@ func commonProjection(db *gorm.DB, key mutationKey, raw []byte) (*CommonRecord, 
 			status = "active"
 		}
 	}
-	rep := map[string]string{"status": status}
+	rep := map[string]any{"status": status}
 	switch key.kind {
 	case "tenant", "organization":
 		rep["slug"], rep["name"] = str("slug"), str("name")
@@ -146,6 +146,9 @@ func commonProjection(db *gorm.DB, key mutationKey, raw []byte) (*CommonRecord, 
 		}
 	case "member":
 		ref.MemberID = key.id
+		if str("identity_issuer") != "" {
+			rep["identity"] = model.Identity{Issuer: str("identity_issuer"), Subject: str("identity_subject")}
+		}
 		rep["email"] = str("email")
 		rep["tenant_role"] = str("tenant_role")
 		if name := str("display_name"); name != "" {
@@ -246,7 +249,7 @@ func publishCommon(ctx context.Context, db *gorm.DB, key mutationKey, before, af
 			types = []string{"granted"}
 		}
 	} else if !put {
-		var a, b map[string]string
+		var a, b map[string]any
 		if err := json.Unmarshal([]byte(previous.Representation), &a); err != nil {
 			return err
 		}
@@ -260,7 +263,7 @@ func publishCommon(ctx context.Context, db *gorm.DB, key mutationKey, before, af
 			}
 		}
 		// Mutable text has no more specific local fact in the draft.
-		aa, bb := map[string]string{}, map[string]string{}
+		aa, bb := map[string]any{}, map[string]any{}
 		for k, v := range a {
 			if k != "status" && k != "tenant_role" && k != "role" {
 				aa[k] = v
@@ -401,6 +404,9 @@ func (s *Store) ReadCommon(ctx context.Context, scope model.CommonScope, key str
 }
 func (s *Store) WriteCommon(ctx context.Context, scope model.CommonScope, key string, condition model.MatchCondition, fn func(port.ProvisioningTx) error) (model.CommonItem, error) {
 	var out model.CommonItem
+	if err := s.checkOwnership(ctx, scope.Family); err != nil {
+		return out, err
+	}
 	err := s.identityTransaction(ctx, func(tx *Store) error {
 		db, err := tx.getDatabase(ctx)
 		if err != nil {

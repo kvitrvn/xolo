@@ -8,15 +8,17 @@ import (
 )
 
 type User struct {
-	TenantRole string `gorm:"not null;default:member"`
-	ID         string `gorm:"primaryKey;autoIncrement:false"`
+	IdentityIssuer  string `gorm:"uniqueIndex:idx_declared_identity,priority:2,where:identity_issuer != ''"`
+	IdentitySubject string `gorm:"uniqueIndex:idx_declared_identity,priority:3"`
+	TenantRole      string `gorm:"not null;default:member"`
+	ID              string `gorm:"primaryKey;autoIncrement:false"`
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
 
 	// TenantID scopes the identity: (tenant_id, provider, subject) is the unique
 	// key, so the same person signing in on two tenants owns two accounts.
-	TenantID string `gorm:"index;uniqueIndex:idx_users_tenant_identity,priority:1;uniqueIndex:idx_users_tenant_email_nonempty,priority:1;not null"`
+	TenantID string `gorm:"uniqueIndex:idx_declared_identity,priority:1;index;uniqueIndex:idx_users_tenant_identity,priority:1;uniqueIndex:idx_users_tenant_email_nonempty,priority:1;not null"`
 
 	Subject  string `gorm:"index;uniqueIndex:idx_users_tenant_identity,priority:2"`
 	Provider string `gorm:"index;uniqueIndex:idx_users_tenant_identity,priority:3,where:provider != '' AND subject != ''"`
@@ -67,6 +69,9 @@ func fromUser(u model.User) *User {
 		TenantRole:  string(u.TenantRole()),
 	}
 
+	if v := u.DeclaredIdentity(); v != nil {
+		user.IdentityIssuer, user.IdentitySubject = v.Issuer, v.Subject
+	}
 	user.Preferences = &UserPreferences{
 		UserID:   string(u.ID()),
 		DarkMode: nil,
@@ -258,3 +263,10 @@ func (w *wrappedApplicationAuthToken) ExpiresAt() *time.Time { return w.t.Expire
 var _ model.AuthToken = &wrappedApplicationAuthToken{}
 
 func (w *wrappedUser) TenantRole() model.TenantRole { return model.TenantRole(w.u.TenantRole) }
+
+func (w *wrappedUser) DeclaredIdentity() *model.Identity {
+	if w.u.IdentityIssuer == "" {
+		return nil
+	}
+	return &model.Identity{Issuer: w.u.IdentityIssuer, Subject: w.u.IdentitySubject}
+}

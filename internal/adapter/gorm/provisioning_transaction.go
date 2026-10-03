@@ -48,11 +48,12 @@ type Publication struct {
 }
 type mutationKey struct{ kind, id string }
 type mutationState struct {
-	before    map[mutationKey][]byte
-	commonPUT bool
-	actor     model.Actor
-	condition *model.MatchCondition
-	etag      string
+	authenticatedMember string
+	before              map[mutationKey][]byte
+	commonPUT           bool
+	actor               model.Actor
+	condition           *model.MatchCondition
+	etag                string
 }
 
 func (s *Store) WithProvisioningTransaction(ctx context.Context, fn func(port.ProvisioningTx) error) error {
@@ -90,7 +91,7 @@ func (s *Store) identityTransaction(ctx context.Context, fn func(*Store) error) 
 				return fmt.Errorf("missing publication clock")
 			}
 			tx = tx.Session(&gorm.Session{SkipDefaultTransaction: true})
-			bound := &Store{getDatabase: func(context.Context) (*gorm.DB, error) { return tx, nil }, transactionBound: true, mutations: &mutationState{before: map[mutationKey][]byte{}, actor: actor, commonPUT: model.IsCommonPUT(ctx)}}
+			bound := &Store{identityProviders: s.identityProviders, ownership: s.ownership, getDatabase: func(context.Context) (*gorm.DB, error) { return tx, nil }, transactionBound: true, mutations: &mutationState{before: map[mutationKey][]byte{}, actor: actor, commonPUT: model.IsCommonPUT(ctx)}}
 			if err := fn(bound); err != nil {
 				return err
 			}
@@ -115,6 +116,9 @@ func (s *Store) mutate(ctx context.Context, kind, id string, fn func(*Store) err
 	return s.identityTransaction(ctx, func(bound *Store) error {
 		if c := bound.mutations.condition; c != nil && !c.Matches(bound.mutations.etag) {
 			return port.ErrPreconditionFailed
+		}
+		if err := bound.checkOwnership(ctx, kind); err != nil {
+			return err
 		}
 		if err := bound.track(ctx, kind, id); err != nil {
 			return err
@@ -227,6 +231,13 @@ func (s *Store) flushMutations(ctx context.Context, db *gorm.DB) error {
 		}
 		if bytes.Equal(before, after) {
 			continue
+		}
+		// Cascades tracked through parent deletion must obey every family's
+		// ownership as well. Login has a narrow exception for its proven account.
+		if key.kind != "member" || key.id != s.mutations.authenticatedMember {
+			if err := s.checkOwnership(ctx, key.kind); err != nil {
+				return err
+			}
 		}
 		if err := validateMutationScope(db, key, before, after); err != nil {
 			return err

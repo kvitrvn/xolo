@@ -4,7 +4,8 @@ L'API utilise un listener HTTPS dédié, distinct du proxy public `/v1/`.
 Elle expose le manifeste et les cinq PUT du contrat App Covenant
 `0.1.0-draft.1`, ainsi que les lectures communes, ETags, préconditions, listes
 et flux de synchronisation des lots 1 à 3. Le lot 4 ajoute les webhooks durables
-facultatifs ; cette version ne revendique pas une conformité complète au contrat.
+facultatifs ; le lot 5 ajoute identité, révocation de sessions, propriété et
+adoption. Cette version ne revendique pas une conformité complète au contrat.
 
 ## Configuration et certificats
 
@@ -64,7 +65,7 @@ mise à jour ou une reconnexion.
 Les UUID sont fournis par le client, sous forme canonique en minuscules. Le rôle
 de tenant est `owner` ou `member` ; celui d'adhésion est `owner`, `admin` ou
 `member`. Le statut est `active` ou `suspended`. Tous les champs sauf
-`display_name` sont obligatoires. Omettre `display_name` le vide.
+`display_name` et l’extension objet `identity` sont obligatoires. Omettre `display_name` le vide.
 
 Les PUT attendent un seul objet JSON, avec `Content-Type: application/json`
 (paramètres valides acceptés). Les champs inconnus, types incorrects, JSON
@@ -83,7 +84,7 @@ sont des noms DNS ASCII, sans IP, port, chemin ou point final.
 
 Chaque succès renvoie `200` avec la représentation normalisée seule, même à la
 création. Un PUT identique ne modifie ni lignes, ni dates, ni audits, ni
-publications. Le PUT membre ne crée aucune identité fournisseur, invitation ou
+publications. Le PUT membre ne crée aucun lien authentifié, invitation ou
 adhésion. Les droits de plateforme existants sont conservés ; aucun nouveau
 droit de plateforme ne peut être attribué par cette API.
 
@@ -265,7 +266,7 @@ avec l’option réseau privé. Les certificats TLS sont toujours vérifiés.
 Les restrictions réseau sortantes du déploiement doivent aussi couvrir Xolo.
 
 Chaque abonnement possède un UUID fourni par le client et appartient à un
-tenant. La propriété est `instance` ; son transfert relève du lot d’adoption.
+tenant. La propriété suit la famille `subscription` configurée au démarrage.
 La suspension du tenant ne suspend pas les notifications de contrôle. Le
 parent est résolu avant lecture des credentials. L’UUID ne peut pas être
 réaffecté à un autre tenant. La limite est de 100 abonnements par instance.
@@ -367,3 +368,159 @@ indisponible, la réservation devient récupérable à expiration. Prévoir au m
 15 secondes de grâce pour le processus. Une console inaccessible provoque des
 reprises, sans arrêt du serveur. Désactiver le worker conserve les abonnements
 et le travail ; le nettoyage reprend à sa réactivation.
+
+## Identité, propriété et adoption — extension v1
+
+La découverte `GET /v1/xolo/extensions` expose identité, adoption, propriété
+effective et webhooks lorsqu’ils sont activés. Le manifeste minimal ne change pas.
+
+### Propriété au démarrage
+
+`XOLO_OWNERSHIP` configure les familles avec une liste `famille=propriétaire` :
+
+```dotenv
+XOLO_OWNERSHIP=tenant=control_plane,tenant_domain=control_plane,organization=control_plane,member=control_plane,organization_membership=control_plane,subscription=control_plane
+```
+
+Les six familles ci-dessus acceptent `local` ou `control_plane`. Une famille
+omise est locale ; une famille ou valeur inconnue fait échouer la configuration.
+Le provisioning mTLS refuse les écritures des familles locales avec 403. Les
+écritures locales sur les familles pilotées, y compris les fragments UI, sont
+refusées côté stockage avec 403. Les lectures gardent leurs permissions.
+Rôles et invitations relèvent de `organization_membership` ; une opération
+composite doit avoir autorité sur toutes les familles qu’elle modifie.
+Les ressources métier conservent leurs autorisations actuelles.
+
+Avec `member=control_plane`, une connexion exige un membre existant et ne
+réécrit pas ses coordonnées depuis le fournisseur. Les comptes issus de
+l’adoption restent valides. Les jetons API et comptes applicatifs sont préservés.
+L’amorçage des administrateurs configurés reste une exception : l’authentificateur
+doit prouver leur e-mail vérifié. Les écritures d’amorçage et de liaison sont
+auditées avec l’UUID du compte. Le provisioning n’accorde aucun rôle de plateforme.
+
+Cette politique n’est pas une permission SQL ni une coordination à chaud.
+Arrêter tous les serveurs, workers et outils opérateur avant transfert, puis
+redémarrer tous les réplicas avec la même configuration. Les commandes opérateur
+ont l’autorité de la base et conservent les contrôles de tenant, de parent et de
+dernier propriétaire. `cmd/seed` sert aux fixtures de test, pas à la maintenance.
+
+### Identité déclarée et connexion
+
+Le PUT d’un membre accepte `"identity":{"issuer":"https://id.example/","subject":"Sujet"}`.
+Issuer est une URL HTTPS exacte de 1 à 2 048 octets UTF-8, avec hôte, sans
+identifiants utilisateur, query, fragment, espaces périphériques ni contrôles.
+Subject contient 1 à 255 octets UTF-8 sans contrôles ; espaces et casse sont
+significatifs. Aucun trim, normalisation ou appel réseau de l’issuer fourni
+n’a lieu pendant le PUT. `null`, objets incomplets ou champs inconnus sont refusés.
+La déclaration apparaît dans PUT/GET/list et intervient dans l’ETag, jamais dans
+le payload des événements communs.
+
+La découverte OIDC/Gitea configurée associe explicitement le nom local du
+fournisseur à son issuer ; Google utilise `https://accounts.google.com`.
+GitHub OAuth et Gitea statique sans découverte n’inventent pas d’issuer.
+Les ID tokens sont vérifiés avec les JWKS configurées lorsqu’elles existent
+(RS256, issuer, audience, expiration). Les chemins OAuth opaques utilisent les
+endpoints token/UserInfo configurés. Le booléen authentifié `email_verified`
+(ou `verified_email` chez Google) est nécessaire au rattachement par e-mail ;
+l’adresse de contact stockée ne constitue jamais une preuve.
+
+L’unicité de déclaration et de liaison est **par tenant** : une même personne
+garde des UUID distincts entre tenants. La connexion recherche l’identité exacte,
+puis le lien existant, avec reprise des noms de providers historiques explicitement
+associés à l’issuer. L’e-mail vérifié peut seulement rattacher un membre sans
+déclaration ni autre lien. Tout conflit est refusé sans fusion ni réattribution.
+Ajouter l’identité correspondant à son propre lien le conserve ; une identité
+différente est refusée tant que ce lien existe. Maintenir l’identité et changer
+l’e-mail conserve le lien. Omettre l’identité retire la déclaration et détache le
+lien ; une connexion ultérieure par e-mail vérifié peut le rattacher.
+Un PUT identique et une connexion sans changement restent sans effet sur la version.
+
+### Sessions et logout
+
+La migration `202610030001` ajoute déclaration, registre de sessions, marques
+de révocation et garde anti-rejeu. Chaque requête utilisant une session OIDC
+consulte la base partagée sans cache. Les sessions du registre durent au maximum
+24 heures ; l’expiration du cookie peut raccourcir cette durée. Les anciens
+cookies OIDC sans entrée de registre sont refusés. Déployer en arrêtant les
+anciens processus : ils ne savent pas appliquer ces révocations. Conserver les
+clés de cookies partagées et synchroniser les horloges. Une erreur de base refuse
+l’authentification de session.
+
+Configurer `/auth/oidc/providers/{provider}/backchannel-logout` sur un hôte de
+tenant actif et accessible au fournisseur, avec
+`backchannel_logout_session_required=false`. Le POST est un formulaire de
+16 Kio maximum avec un seul `logout_token`, sans query ni cookie nécessaire.
+Le profil exige RS256, les clés configurées, l’issuer exact, l’unique audience
+client, un éventuel `azp` correspondant, `sub`, `jti`, `iat` et `exp`, avec âge
+et durée de vie limités à cinq minutes et sans tolérance future/d’expiration.
+L’événement logout est unique et contient `{}` ; `nonce` est interdit même null.
+`sid` seul est refusé ; avec `sub`, il ne restreint pas la portée.
+Succès : 200 ; token invalide ou rejoué : 400 ; erreur de registre : 503.
+Le token brut n’est pas journalisé. Ce profil restreint s’appuie sur
+[OIDC Back-Channel Logout](https://openid.net/specs/openid-connect-backchannel-1_0.html).
+
+La révocation et la garde anti-rejeu sont atomiques et persistent après
+redémarrage. Toutes les sessions OIDC Xolo du couple issuer/sujet sont révoquées,
+y compris entre tenants et alias de providers ; les autres sujets/issuers,
+comptes, rôles et adhésions sont préservés. Création de session et logout utilisent
+le même verrou ; le début de connexion est lié au provider et au state OAuth.
+Un callback d’une authentification commencée avant révocation ne peut recréer
+une session après celle-ci : recommencer la connexion. Une requête déjà autorisée
+peut finir. Les jetons API internes et bearer/ID tokens externes sont des
+credentials distincts, hors de cette révocation des sessions navigateur OIDC.
+Les marques et gardes durables sont conservées ; prévoir leur croissance.
+
+### Export, adoption et détachement
+
+L’export privé est disponible par `GET /v1/xolo/export` sur le listener mTLS
+(`Cache-Control: no-store`) ou avec le DSN existant :
+
+```sh
+go run ./cmd/adoption -action export -file /secure/xolo-adoption.json
+go run ./cmd/adoption -action verify -file /secure/xolo-adoption.json
+```
+
+Le fichier est créé en 0600 sans écrasement ; une erreur signalée le supprime,
+mais un processus tué peut laisser un export incomplet. Il contient des données
+personnelles : protéger le répertoire et le transfert, sans dépôt Git ni logs.
+L’enveloppe JSON `xolo-adoption/1` contient `payload` et `sha256`. L’empreinte
+hexadécimale minuscule SHA-256 couvre **les octets UTF-8 exacts de la valeur JSON
+payload, accolades incluses**, sans l’enveloppe ni ses espaces. Ne pas reformater
+le payload avant vérification. L’empreinte détecte une corruption, pas un
+remplacement malveillant ; fichier et transport établissent sa provenance.
+
+Le payload contient version, contrat, source persistante, `c0`, cinq familles,
+records (`family`, `key`, `representation`, `etag`), nombre et `complete: true`.
+C0 précède les lectures, sous verrou de publication pour un snapshot complet.
+`default` et les ressources suspendues sont inclus. L’importeur vérifie fichier,
+empreinte, nombre et complétude avant toute génération autoritaire. L’export
+actuel garde l’inventaire commun en mémoire et bloque les writers pendant la
+lecture : prévoir une fenêtre de maintenance pour les gros inventaires.
+Il exclut données métier, liens non déclarés, sessions, jetons API, audit et
+secrets webhook. Conserver une sauvegarde de base réellement restaurable.
+
+1. Tester une connexion réelle d’administrateur de plateforme et sauvegarder.
+   Exporter en mode local ; importer côté console les UUID qualifiés par la
+   source. Réconcilier noms, domaines et e-mails dans la console, sans remapper
+   les UUID, dupliquer `default`, fusionner les comptes ni envoyer de PUT de
+   marquage. Xolo fournit le validateur de format, pas une application console
+   ni un endpoint d’import dans sa base.
+2. Rejouer depuis C0 et relire les ressources de façon idempotente. Un 410 impose
+   d’abandonner la génération en cours et de recommencer entièrement.
+3. Arrêter tous les writers, rattraper le flux final, configurer les propriétaires
+   et redémarrer sur la même base. Vérifier découverte, refus des anciennes
+   écritures et accès des comptes existants.
+4. Pour détacher, vérifier par connexion réelle l’accès opérateur qui subsistera,
+   arrêter serveurs, workers et outils, puis exécuter :
+
+   ```sh
+   go run ./cmd/adoption -action detach -writers-stopped -operator-access-verified
+   ```
+
+   La commande exige un administrateur actif enregistré et supprime atomiquement
+   abonnements, secrets chiffrés et livraisons. L’audit attribue l’opération à
+   l’UID système de l’opérateur. Les flags attestent les vérifications humaines ;
+   ils ne testent pas le fournisseur et n’arrêtent aucun autre processus.
+   Ressources, UUID, liens, audit, source et curseurs restent intacts. Un webhook
+   déjà transmis ne peut être rappelé. Retirer les overrides de propriété,
+   redémarrer en autonomie et vérifier connexion, écritures locales et flux.

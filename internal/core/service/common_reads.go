@@ -29,3 +29,10 @@ func (s *ProvisioningService) WriteCommon(ctx context.Context, scope model.Commo
 		return fn(&bound)
 	})
 }
+
+func (s *ProvisioningService) OwnershipPolicy() model.OwnershipPolicy {
+	if p, ok := s.transactions.(interface{ OwnershipPolicy() model.OwnershipPolicy }); ok {
+		return p.OwnershipPolicy()
+	}
+	return model.OwnershipPolicy{}.Effective()
+}

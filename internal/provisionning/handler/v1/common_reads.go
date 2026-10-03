@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -129,7 +130,7 @@ func (h *Handler) handleCommonPut(w http.ResponseWriter, r *http.Request) {
 	switch scope.Family {
 	case "member":
 		required = []string{"email", "tenant_role", "status"}
-		optional = []string{"display_name"}
+		optional = []string{"display_name", "identity"}
 	case "organization_membership":
 		required = []string{"role", "status"}
 	case "tenant_domain":
@@ -138,6 +139,11 @@ func (h *Handler) handleCommonPut(w http.ResponseWriter, r *http.Request) {
 	p, ok := decodeCommon(w, r, required, optional...)
 	if !ok {
 		return
+	}
+	var identity *model.Identity
+	if raw, ok := p["identity"]; ok {
+		identity = &model.Identity{}
+		_ = json.Unmarshal([]byte(raw), identity)
 	}
 	condition, err := model.ParseMatchCondition(r.Header.Values("If-Match"))
 	if err != nil {
@@ -152,7 +158,7 @@ func (h *Handler) handleCommonPut(w http.ResponseWriter, r *http.Request) {
 		case "organization":
 			_, err = s.PutCommonOrganization(r.Context(), model.TenantID(scope.TenantID), model.OrgID(key), service.CommonResource{Slug: p["slug"], Name: p["name"], Status: model.Status(p["status"])})
 		case "member":
-			_, err = s.PutCommonMember(r.Context(), model.TenantID(scope.TenantID), model.UserID(key), service.CommonMember{Email: p["email"], DisplayName: p["display_name"], TenantRole: model.TenantRole(p["tenant_role"]), Status: model.Status(p["status"])})
+			_, err = s.PutCommonMember(r.Context(), model.TenantID(scope.TenantID), model.UserID(key), service.CommonMember{Identity: identity, Email: p["email"], DisplayName: p["display_name"], TenantRole: model.TenantRole(p["tenant_role"]), Status: model.Status(p["status"])})
 		case "tenant_domain":
 			_, err = s.PutCommonDomain(r.Context(), model.TenantID(scope.TenantID), key, model.Status(p["status"]))
 		case "organization_membership":

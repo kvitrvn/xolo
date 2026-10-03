@@ -10,13 +10,14 @@ import (
 	"github.com/xolo-gateway/xolo/internal/core/port"
 )
 
-// Common representations contain only the fields governed by the contract.
-// Application settings, identities and platform permissions remain independent.
+// Common representations include the optional, separately discovered identity
+// declaration. Application settings and platform permissions remain independent.
 type CommonResource struct {
 	Slug, Name string
 	Status     model.Status
 }
 type CommonMember struct {
+	Identity           *model.Identity
 	Email, DisplayName string
 	TenantRole         model.TenantRole
 	Status             model.Status
@@ -119,6 +120,9 @@ func (s *ProvisioningService) PutCommonOrganization(ctx context.Context, tid mod
 }
 func (s *ProvisioningService) PutCommonMember(ctx context.Context, tid model.TenantID, id model.UserID, p CommonMember) (CommonMember, error) {
 	ctx = model.WithCommonPUT(ctx)
+	if err := ValidateIdentity(p.Identity); err != nil {
+		return p, err
+	}
 	p.Email = model.NormalizeEmail(p.Email)
 	p.DisplayName = strings.TrimSpace(p.DisplayName)
 	p.TenantRole = model.TenantRole(strings.TrimSpace(string(p.TenantRole)))
@@ -148,7 +152,7 @@ func (s *ProvisioningService) PutCommonMember(ctx context.Context, tid model.Ten
 				return port.ErrNotAllowed
 			}
 		}
-		if old != nil && old.Email() == p.Email && old.DisplayName() == p.DisplayName && old.TenantRole() == p.TenantRole && model.DeclaredStatus(old.Active()) == p.Status {
+		if old != nil && identitiesEqual(old.DeclaredIdentity(), p.Identity) && (p.Identity != nil || old.Provider() == "") && old.Email() == p.Email && old.DisplayName() == p.DisplayName && old.TenantRole() == p.TenantRole && model.DeclaredStatus(old.Active()) == p.Status {
 			return nil
 		}
 		var u *model.BaseUser
@@ -161,6 +165,10 @@ func (s *ProvisioningService) PutCommonMember(ctx context.Context, tid model.Ten
 			u.SetDisplayName(p.DisplayName)
 			u.SetActive(p.Status == model.StatusActive)
 		}
+		if p.Identity == nil {
+			u.SetIdentity("", "")
+		}
+		u.SetDeclaredIdentity(p.Identity)
 		u.SetTenantRole(p.TenantRole)
 		return tx.SaveUser(ctx, u)
 	})
@@ -249,4 +257,22 @@ func (s *ProvisioningService) PutCommonMembership(ctx context.Context, tid model
 		return tx.SetCommonMembership(ctx, oid, uid, p.Role, p.Status)
 	})
 	return p, err
+}
+
+// Identity values are exact: HTTPS issuer without userinfo/query/fragment and
+// a nonempty UTF-8 subject, at most 255 bytes, without control characters.
+func ValidateIdentity(v *model.Identity) error {
+	if v == nil {
+		return nil
+	}
+	if !v.Valid() {
+		return port.ErrInvalid
+	}
+	return nil
+}
+func identitiesEqual(a, b *model.Identity) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }

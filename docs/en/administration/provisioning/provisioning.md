@@ -5,7 +5,7 @@ five complete PUT operations, unit reads, lists and the event feed. It shares tr
 server but has its own TLS configuration. The public OpenAI-compatible `/v1/`
 proxy is unaffected.
 
-Lots 1–4 are implemented, including optional durable webhooks. The manifest
+Lots 1–5 are implemented, including optional durable webhooks. The manifest
 identifies the targeted contract; it is not a claim of complete conformance.
 
 ## Configuration and authority
@@ -54,13 +54,15 @@ It is a correlation identifier, not an idempotency key.
 UUID keys use canonical lowercase syntax. Tenant roles are `owner`/`member`;
 membership roles are `owner`/`admin`/`member`. Status is `active`/`suspended`.
 Tenant creation remains disabled in single-tenant mode; existing tenants can
-still be updated. A tenant account PUT creates no identity, invitation or
-membership. Existing platform privileges and provider identities are preserved,
+still be updated. A tenant account PUT creates no authenticated link, invitation or
+membership. Optional declared identity follows the replacement rules below.
+Existing platform privileges are preserved,
 and provisioning cannot assign configured default-admin emails to other accounts.
 
 PUT requires `application/json` (valid media-type parameters are accepted), one
-object, declared string fields and no nulls. All fields except `display_name`
-are required. Omitting `display_name` clears it; an empty result is omitted.
+object, declared fields and no nulls. Common scalar fields are strings; the
+optional `identity` extension is an object. All fields except `display_name`
+and `identity` are required. Omitting `display_name` clears it; an empty result is omitted.
 The entire body, including trailing whitespace, is limited to 1,048,576 bytes.
 Invalid types/JSON, unknown fields, invalid UTF-8 and excess bytes return
 `400 invalid_json`; absent fields and invalid values return
@@ -267,7 +269,7 @@ always verified; the private-network switch does not disable TLS verification.
 Outbound firewall restrictions should also apply to the Xolo process.
 
 Subscriptions have client-generated UUID keys under a tenant. Their ownership
-is currently `instance`; ownership transfer belongs to the adoption lot.
+is the effective `subscription` startup policy described below.
 Tenant suspension does not disable control-plane notifications. The tenant
 must exist before credentials are accessed; an ID cannot move between tenants.
 At most 100 subscriptions exist per instance.
@@ -368,3 +370,166 @@ that another worker can recover. Allow at least 15 seconds for process shutdown.
 Console unavailability causes retries, not a server shutdown. Disabling the
 worker preserves subscriptions and pending work, including when the provisioning
 listener is disabled; cleanup resumes when the worker is enabled again.
+
+## Identity, ownership and adoption (extension v1)
+
+`GET /v1/xolo/extensions` reports effective ownership and the identity, adoption
+and optional webhook extensions. The minimal `/v1/manifest` is unchanged.
+
+### Startup ownership
+
+`XOLO_OWNERSHIP` is a comma-separated map of `family=owner`. Families are
+`tenant`, `tenant_domain`, `organization`, `member`,
+`organization_membership`, and `subscription`; owners are `local` and
+`control_plane`. Omitted families default to `local`. Unknown families and
+values fail startup validation. For example:
+
+```dotenv
+XOLO_OWNERSHIP=tenant=control_plane,tenant_domain=control_plane,organization=control_plane,member=control_plane,organization_membership=control_plane,subscription=control_plane
+```
+
+The provisioning listener retains its required mTLS authority but rejects
+writes to local families with 403. Local UI writes, including fragment requests,
+are refused with 403 for control-plane families. Reads retain their existing
+permissions. Enforcement is in the transaction-bound store: hiding a form is
+not the enforcement mechanism. Role and invitation changes belong to
+`organization_membership`; composite operations must own every affected family.
+Business resources retain their existing authorization until their extension
+profiles are implemented. API tokens and application shadow accounts remain usable.
+
+When `member=control_plane`, first login requires an existing member. Adoption
+keeps existing members, including locally created members. Contact email/name
+are not updated from provider claims in that mode. Verified configured default
+administrator emails remain the bootstrap exception; existing platform roles
+are retained. Bootstrap writes and identity links are attributed to the resulting
+user in the mutation audit. Provisioning never grants platform roles.
+
+Ownership is an immutable process startup policy, not a database permission or
+a live distributed lock. Stop **every** server, worker and operator writer before
+changing it, and restart all replicas with identical settings. Operator tools
+have database authority; they must preserve tenant/parent and last-owner checks.
+`cmd/seed` is a test fixture tool, not a production maintenance path.
+
+### Explicit identity and login
+
+Member PUT optionally accepts `"identity":{"issuer":"https://id.example/","subject":"Subject"}`.
+The issuer is an exact HTTPS URL (1–2048 UTF-8 bytes), with host and without
+userinfo, query, fragment, surrounding whitespace or control characters. Subject
+is an exact nonempty UTF-8 string of at most 255 bytes without control characters.
+Subject spaces, case and issuer trailing slashes remain significant. No issuer
+network access occurs during PUT. Null, incomplete and unknown identity fields
+are rejected. GET, list and ETag include the declaration; public events contain
+only resource keys and ETags, never the identity.
+
+Configured named OIDC/Gitea discovery documents explicitly associate the local
+provider ID with their issuer. Google uses `https://accounts.google.com`.
+GitHub OAuth and static Gitea without discovery do not invent an issuer and
+cannot prove an explicit issuer declaration. Signed ID tokens are additionally
+verified against configured JWKS (RS256, issuer, audience and expiry); configured
+OAuth token/UserInfo endpoints supply authenticated claims on the opaque path.
+An `email_verified` boolean from the authenticator (Google's `verified_email`
+also applies) is required for email attachment and default-admin bootstrap.
+Contact email in the database is never verification evidence.
+
+Links and declarations are unique **per tenant**. The same issuer/subject may
+own distinct member UUIDs in different tenants. Login resolves the exact
+identity first, then an existing link (including the explicitly mapped legacy
+provider name). Verified-email attachment is allowed only for a member without
+a declaration or another link. Conflicts refuse the entire transaction without
+merging or reassigning accounts. Adding a declaration to its own matching link
+preserves it; assigning a different identity to an existing link is rejected.
+Keeping identity while changing email preserves the link. Omitting identity
+removes the declaration and detaches the link, even when email is unchanged.
+Later verified-email login may reattach it. An identical PUT is a no-op; a login
+that changes neither profile nor link creates no new audit/version.
+
+### Durable browser sessions and back-channel logout
+
+Migration `202610030001` adds identity declarations, the session registry,
+revocation watermarks and replay guards. OIDC cookies carry a random session ID;
+every session authentication checks the shared database without a local cache.
+Registry sessions expire after 24 hours (cookie expiry may shorten this).
+Pre-migration OIDC cookies without a registry entry are rejected. Stop old
+replicas before deployment: old binaries cannot enforce this registry. Preserve
+shared cookie keys and synchronize replica clocks. Database failure fails closed.
+
+Register `/auth/oidc/providers/{provider}/backchannel-logout` on a reachable
+active tenant host as the provider's back-channel URI, with
+`backchannel_logout_session_required=false`. It accepts a form POST of at most
+16 KiB containing exactly one `logout_token`, no query parameters, no cookie.
+The profile requires RS256 with configured signing JWKS, exact issuer, the sole
+client audience, matching optional `azp`, nonempty `sub` and `jti`, required
+`iat`/`exp`, at most five minutes of age and lifetime, and no future-time or
+expiration grace. The single logout event must contain an empty object;
+`nonce` is forbidden even if null. A `sid` with `sub` does not narrow scope;
+sid-only logout is unsupported. Invalid tokens/replays return 400, success 200,
+and a registry failure 503. No raw token is logged. This is a restricted profile
+of [OIDC Back-Channel Logout 1.0](https://openid.net/specs/openid-connect-backchannel-1_0.html).
+
+Logout atomically records the replay key and revocation watermark and removes
+all registry sessions for that **issuer/subject across tenants and provider
+aliases**. Other subjects and issuers remain usable. Accounts, memberships and
+platform roles remain intact. Session issuance shares the publication lock with
+revocation; callbacks bind their authentication start to the provider and OAuth
+state, and authentication started before a revocation cannot issue a new
+session afterward. Restart sign-in. Requests already authorized may finish.
+Internal API tokens and externally supplied bearer/ID tokens are separate
+credentials; back-channel logout revokes Xolo OIDC browser sessions only.
+Watermarks and replay keys are durable and retained; budget storage accordingly.
+
+### Export and transfer procedure
+
+`GET /v1/xolo/export` returns the private inventory over the mTLS listener with
+`Cache-Control: no-store`. Alternatively, with the existing database DSN:
+
+```sh
+go run ./cmd/adoption -action export -file /secure/xolo-adoption.json
+go run ./cmd/adoption -action verify -file /secure/xolo-adoption.json
+```
+
+Export creates a new 0600 file, refuses overwrite and removes it on reported
+failure. A killed process may leave an incomplete file. Protect and securely
+transfer it: it contains contact data and declared identities. Do not log or
+commit it. The versioned `xolo-adoption/1` JSON envelope has `payload` and
+lowercase hexadecimal `sha256`. SHA-256 covers the **exact UTF-8 bytes of the
+payload JSON value, including its braces**, excluding the envelope and its
+whitespace. Do not pretty-print or reserialize the payload before verification.
+The digest detects corruption, not malicious replacement: transport and file
+permissions establish provenance.
+
+Payload includes version, contract, persistent feed source, `c0`, the five
+families, records (`family`, immutable `key`, `representation`, `etag`), record
+count and `complete: true`. C0 is captured before all reads under the shared
+publication lock, producing a consistent complete snapshot. Suspended resources
+and `default` are included. Consumers must reject incomplete, altered or
+incompatible files before committing an inventory generation. Export currently
+buffers the common inventory in memory and holds the writer lock during reads;
+plan a maintenance window for large inventories. It excludes business data,
+linked but undeclared identities, sessions, API tokens, audit and webhook secrets.
+Keep a separately tested restorable database backup.
+
+1. Verify a real platform-administrator login and back up the instance. Keep
+   ownership local while exporting. Import UUIDs **qualified by feed source**
+   into a staged console inventory. Reconcile slug/domain/email collisions in
+   the console without remapping IDs, duplicating `default`, merging accounts
+   or sending marking PUTs. This repository provides the envelope validator,
+   not a console application or an import endpoint into Xolo.
+2. Replay the feed from C0, re-read resources and process duplicate invalidations
+   idempotently. A 410 means discarding the staged inventory and starting again.
+3. Stop all writers, catch up the final feed, set family ownership and restart
+   with the same database. Verify discovery, rejection of local mutations and
+   existing account access. No resource rewrite is needed.
+4. To detach, test a real platform-admin login that will remain usable, stop
+   **all** servers, workers and operator tools, then run:
+
+   ```sh
+   go run ./cmd/adoption -action detach -writers-stopped -operator-access-verified
+   ```
+
+   The command checks an active recorded platform administrator and atomically
+   deletes subscriptions, encrypted secrets and deliveries. It records the OS
+   operator UID in the audit. The flags attest operational checks; they cannot
+   establish provider reachability or stop other processes automatically.
+   Resources, UUIDs, identity links, audit, feed source and cursors remain intact.
+   A transmitted webhook cannot be recalled. Clear ownership overrides and
+   restart in local mode, then verify login, local writes and feed continuity.

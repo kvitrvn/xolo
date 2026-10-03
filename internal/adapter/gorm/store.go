@@ -6,13 +6,16 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	"github.com/xolo-gateway/xolo/internal/core/model"
 	"github.com/xolo-gateway/xolo/internal/core/port"
 	"gorm.io/gorm"
 )
 
 type Store struct {
-	mutations   *mutationState
-	getDatabase func(ctx context.Context) (*gorm.DB, error)
+	identityProviders map[string]string
+	ownership         model.OwnershipPolicy
+	mutations         *mutationState
+	getDatabase       func(ctx context.Context) (*gorm.DB, error)
 	// Use-case callbacks own the transaction and the retry boundary: on a
 	// transaction-bound store, withRetry runs fn exactly once
 	// on that transaction and never opens its own.

@@ -53,30 +53,26 @@ func (s *Store) GetUserByID(ctx context.Context, userID model.UserID) (model.Use
 	return &wrappedUser{&user}, nil
 }
 
-// GetUserByIdentity implements port.UserStore.
+// GetUserByIdentity resolves legacy provider aliases only through the explicit
+// startup mapping. Ambiguous pre-existing links are refused, never merged.
 func (s *Store) GetUserByIdentity(ctx context.Context, tenantID model.TenantID, provider, subject string) (model.User, error) {
 	if provider == "" || subject == "" {
 		return nil, port.ErrNotFound
 	}
-	var user User
-
+	var users []User
 	err := s.withRetry(ctx, false, func(ctx context.Context, db *gorm.DB) error {
-		err := db.Preload("Roles").Preload("Preferences").
-			Where("tenant_id = ? AND provider = ? AND subject = ?", string(tenantID), provider, subject).
-			First(&user).Error
-		if err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return errors.WithStack(port.ErrNotFound)
-			}
-			return errors.WithStack(err)
-		}
-		return nil
+		return db.Preload("Roles").Preload("Preferences").Where("tenant_id = ? AND provider IN ? AND subject = ?", tenantID, s.identityAliases(provider), subject).Limit(2).Find(&users).Error
 	})
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-
-	return &wrappedUser{&user}, nil
+	if len(users) == 0 {
+		return nil, port.ErrNotFound
+	}
+	if len(users) != 1 {
+		return nil, port.ErrAlreadyExists
+	}
+	return &wrappedUser{&users[0]}, nil
 }
 
 // SaveUser implements port.UserStore.
@@ -101,6 +97,39 @@ func (s *Store) saveUser(ctx context.Context, user model.User) error {
 			return port.ErrInvalid
 		}
 
+		if identity := user.DeclaredIdentity(); identity != nil {
+			if !identity.Valid() {
+				return port.ErrInvalid
+			}
+			if user.Provider() != "" && (s.identityIssuer(user.Provider()) != identity.Issuer || user.Subject() != identity.Subject) {
+				return port.ErrAlreadyExists
+			}
+			if previous.Provider != "" {
+				issuer := s.identityIssuer(previous.Provider)
+				if identity.Issuer != issuer || identity.Subject != previous.Subject {
+					return port.ErrAlreadyExists
+				}
+			}
+			providers := s.identityAliases(identity.Issuer)
+			var other User
+			err := db.Where("tenant_id = ? AND id <> ? AND ((identity_issuer = ? AND identity_subject = ?) OR (provider IN ? AND subject = ?))", user.TenantID(), user.ID(), identity.Issuer, identity.Subject, providers, identity.Subject).First(&other).Error
+			if err == nil {
+				return port.ErrAlreadyExists
+			}
+			if err != gorm.ErrRecordNotFound {
+				return err
+			}
+		}
+		if user.Provider() != "" {
+			var other User
+			err := db.Where("tenant_id = ? AND id <> ? AND ((identity_issuer = ? AND identity_subject = ?) OR (provider IN ? AND subject = ?))", user.TenantID(), user.ID(), s.identityIssuer(user.Provider()), user.Subject(), s.identityAliases(user.Provider()), user.Subject()).First(&other).Error
+			if err == nil {
+				return port.ErrAlreadyExists
+			}
+			if err != gorm.ErrRecordNotFound {
+				return err
+			}
+		}
 		gormUser := fromUser(user)
 
 		// Use Clauses with OnConflict to handle upsert
@@ -108,7 +137,7 @@ func (s *Store) saveUser(ctx context.Context, user model.User) error {
 			Columns:   []clause.Column{{Name: "id"}},
 			UpdateAll: true,
 		}).Omit("Roles", "Preferences").Create(gormUser).Error; err != nil {
-			if isUniqueViolation(err, "users", "identity") || isUniqueViolation(err, "users", "provider", "subject") {
+			if isUniqueViolation(err, "users", "identity") || isUniqueViolation(err, "idx_declared_identity") || isUniqueViolation(err, "users", "provider", "subject") {
 				return errors.Wrap(port.ErrAlreadyExists, "provider identity is already bound")
 			}
 			if isUniqueViolation(err, "users", "email") {

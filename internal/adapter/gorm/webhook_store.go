@@ -80,6 +80,9 @@ func webhookRow(db *gorm.DB, tid, id string) (WebhookSubscription, error) {
 	return row, err
 }
 func (s *Store) PutWebhook(ctx context.Context, tid, id string, p model.WebhookSettings) (model.WebhookSubscription, error) {
+	if err := s.checkOwnership(ctx, "subscription"); err != nil {
+		return model.WebhookSubscription{}, err
+	}
 	var result model.WebhookSubscription
 	err := s.identityTransaction(ctx, func(tx *Store) error {
 		db, err := tx.getDatabase(ctx)
@@ -128,6 +131,9 @@ func (s *Store) PutWebhook(ctx context.Context, tid, id string, p model.WebhookS
 		if err := db.Save(&row).Error; err != nil {
 			return err
 		}
+		if err := tx.auditControlOperation(ctx, "subscription", id, "put"); err != nil {
+			return err
+		}
 		result, err = webhookView(row)
 		return err
 	})
@@ -168,6 +174,9 @@ func (s *Store) ListWebhooks(ctx context.Context, tid string) ([]model.WebhookSu
 	return out, nil
 }
 func (s *Store) DeleteWebhook(ctx context.Context, tid, id string) error {
+	if err := s.checkOwnership(ctx, "subscription"); err != nil {
+		return err
+	}
 	return s.identityTransaction(ctx, func(tx *Store) error {
 		db, err := tx.getDatabase(ctx)
 		if err != nil {
@@ -179,10 +188,16 @@ func (s *Store) DeleteWebhook(ctx context.Context, tid, id string) error {
 		if err := db.Where("subscription_id = ? AND tenant_id = ?", id, tid).Delete(&WebhookDelivery{}).Error; err != nil {
 			return err
 		}
-		return db.Where("id = ? AND tenant_id = ?", id, tid).Delete(&WebhookSubscription{}).Error
+		if err := db.Where("id = ? AND tenant_id = ?", id, tid).Delete(&WebhookSubscription{}).Error; err != nil {
+			return err
+		}
+		return tx.auditControlOperation(ctx, "subscription", id, "delete")
 	})
 }
 func (s *Store) ResetWebhook(ctx context.Context, tid, id string) error {
+	if err := s.checkOwnership(ctx, "subscription"); err != nil {
+		return err
+	}
 	return s.identityTransaction(ctx, func(tx *Store) error {
 		db, err := tx.getDatabase(ctx)
 		if err != nil {
@@ -198,7 +213,10 @@ func (s *Store) ResetWebhook(ctx context.Context, tid, id string) error {
 		if err := db.Where("subscription_id = ? AND tenant_id = ?", id, tid).Delete(&WebhookDelivery{}).Error; err != nil {
 			return err
 		}
-		return db.Model(&WebhookSubscription{}).Where("id = ? AND tenant_id = ?", id, tid).Updates(map[string]any{"position": clock.Sequence, "state": "ready"}).Error
+		if err := db.Model(&WebhookSubscription{}).Where("id = ? AND tenant_id = ?", id, tid).Updates(map[string]any{"position": clock.Sequence, "state": "ready"}).Error; err != nil {
+			return err
+		}
+		return tx.auditControlOperation(ctx, "subscription", id, "reset")
 	})
 }
 func (s *Store) PrepareWebhooks(ctx context.Context, capacity int) error {
