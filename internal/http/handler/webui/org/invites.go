@@ -141,6 +141,9 @@ func (h *Handler) createInvite(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt: r.FormValue("expires_at"), MaxUses: r.FormValue("max_uses"),
 	})
 	if err != nil {
+		if webcommon.RejectOwnership(w, r, err) {
+			return
+		}
 		webcommon.WriteInvitationError(w, r, err)
 		return
 	}
@@ -162,6 +165,9 @@ func (h *Handler) deleteInvite(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.inviteStore.DeleteInvite(ctx, model.InviteTokenID(inviteID)); err != nil {
+		if webcommon.RejectOwnership(w, r, err) {
+			return
+		}
 		if errors.Is(err, port.ErrNotFound) {
 			http.Error(w, "Invite not found", http.StatusNotFound)
 			return
@@ -185,6 +191,9 @@ func (h *Handler) revokeInvite(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.inviteStore.RevokeInvite(ctx, model.InviteTokenID(inviteID)); err != nil {
+		if webcommon.RejectOwnership(w, r, err) {
+			return
+		}
 		if errors.Is(err, port.ErrNotFound) {
 			http.Error(w, "Invite not found", http.StatusNotFound)
 			return

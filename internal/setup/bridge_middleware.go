@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/xolo-gateway/xolo/internal/config"
+	"github.com/xolo-gateway/xolo/internal/core/model"
 	"github.com/xolo-gateway/xolo/internal/http/middleware/bridge"
 	"github.com/pkg/errors"
 )
@@ -34,7 +35,10 @@ func getBridgeMiddlewareFromConfig(ctx context.Context, conf *config.Config) (fu
 		ActiveByDefault: conf.HTTP.Authn.ActiveByDefault,
 		AutoCreateUsers: conf.HTTP.Authn.AutoCreateUsers,
 		DefaultAdmins:   conf.HTTP.Authn.DefaultAdmins,
-		Transactions:    transactions,
+		// Computed once: the ownership policy is fixed at startup, with the
+		// same value on every replica.
+		Managed:      conf.Ownership.Effective()[model.FamilyMember] == model.OwnerControlPlane,
+		Transactions: transactions,
 	})
 
 	return bridgeMiddleware, nil
