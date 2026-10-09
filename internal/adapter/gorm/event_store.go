@@ -122,7 +122,11 @@ func (s *Store) EvictOverflow(ctx context.Context, orgID model.OrgID, keepN int)
 	var affected int64
 	err := s.withRetry(ctx, true, func(ctx context.Context, db *gorm.DB) error {
 		// The keep-set is materialized in a derived table: PostgreSQL forbids
-		// LIMIT directly inside an IN (...) subquery.
+		// LIMIT directly inside an IN (...) subquery. The events of a frozen
+		// member stay: one of them would make the guards abort the whole
+		// statement, and the rest of the organization is trimmed all the
+		// same. Frozen organizations and tenants are left out by
+		// ListEventOrgIDs.
 		result := db.Exec(`
 			DELETE FROM events
 			WHERE org_id = ? AND pinned = ? AND id NOT IN (
@@ -132,7 +136,9 @@ func (s *Store) EvictOverflow(ctx context.Context, orgID model.OrgID, keepN int)
 					ORDER BY created_at DESC
 					LIMIT ?
 				) AS kept
-			)`, string(orgID), false, string(orgID), false, keepN)
+			)
+			AND NOT EXISTS (SELECT 1 FROM resource_deletions d WHERE d.family = ? AND d.resource_id = events.user_id)`,
+			string(orgID), false, string(orgID), false, keepN, model.FamilyMember)
 		if result.Error != nil {
 			return errors.WithStack(result.Error)
 		}
@@ -147,17 +153,28 @@ func (s *Store) EvictOverflow(ctx context.Context, orgID model.OrgID, keepN int)
 
 // ListEventOrgIDs implements port.EventStore.
 func (s *Store) ListEventOrgIDs(ctx context.Context) ([]model.OrgID, error) {
-	var ids []string
+	var ids, frozen []string
 	err := s.withRetry(ctx, false, func(ctx context.Context, db *gorm.DB) error {
-		return errors.WithStack(db.Model(&Event{}).
-			Distinct().Pluck("org_id", &ids).Error)
+		if err := db.Model(&Event{}).Distinct().Pluck("org_id", &ids).Error; err != nil {
+			return errors.WithStack(err)
+		}
+		// The events of a frozen scope can not be evicted anymore.
+		return errors.WithStack(db.Table("organizations o").
+			Where("EXISTS (SELECT 1 FROM resource_deletions d WHERE (d.family = 'organization' AND d.resource_id = o.id) OR (d.family = 'tenant' AND d.resource_id = o.tenant_id))").
+			Pluck("o.id", &frozen).Error)
 	})
 	if err != nil {
 		return nil, err
 	}
+	skip := make(map[string]bool, len(frozen))
+	for _, id := range frozen {
+		skip[id] = true
+	}
 	result := make([]model.OrgID, 0, len(ids))
 	for _, id := range ids {
-		result = append(result, model.OrgID(id))
+		if !skip[id] {
+			result = append(result, model.OrgID(id))
+		}
 	}
 	return result, nil
 }
