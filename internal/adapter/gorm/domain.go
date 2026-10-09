@@ -93,4 +93,18 @@ func (s *Store) SaveDomain(ctx context.Context, domain model.Domain) error {
 	})
 }
 
+// DeleteDomain implements port.DomainStore.
+func (s *Store) DeleteDomain(ctx context.Context, tenantID model.TenantID, hostname string) error {
+	return s.recorded(ctx, tracking("domain", hostname), func(ctx context.Context, db *gorm.DB) error {
+		result := db.Where("hostname = ? AND tenant_id = ?", hostname, string(tenantID)).Delete(&Domain{})
+		if result.Error != nil {
+			return errors.WithStack(result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return errors.WithStack(port.ErrNotFound)
+		}
+		return nil
+	})
+}
+
 var _ port.DomainStore = &Store{}

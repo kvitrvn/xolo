@@ -9,6 +9,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/xolo-gateway/xolo/internal/core/model"
 	"github.com/xolo-gateway/xolo/internal/core/port"
+	"github.com/xolo-gateway/xolo/internal/deletion"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -22,6 +23,22 @@ type ResourceDeletion struct {
 	TenantID   string `gorm:"index;not null"`
 	DeletedAt  time.Time
 	PurgeAfter time.Time `gorm:"index"`
+	// ConfirmedAt and ExportSHA256 record the confirmation of the export: the
+	// deletion may be purged once PurgeAfter has passed.
+	ConfirmedAt  *time.Time
+	ExportSHA256 string `gorm:"not null;default:''"`
+	// PurgedAt is set once the scope is purged. The deletion is kept: its
+	// identifier stays retired, and the guards keep refusing to reuse it.
+	PurgedAt *time.Time `gorm:"index"`
+	// PurgedWith designates the deletion of the parent this resource was
+	// purged with.
+	PurgedWith string `gorm:"not null;default:''"`
+	Attempts   int    `gorm:"not null;default:0"`
+	Diagnostic string `gorm:"not null;default:''"`
+	// Purging is only ever true within a purge transaction, which sets it
+	// back before committing: the guards let that transaction remove the
+	// frozen rows, and no other ever sees it set.
+	Purging bool `gorm:"not null;default:false"`
 }
 
 // LifecycleControl remembers whether the guards are installed.
@@ -33,7 +50,20 @@ type LifecycleControl struct {
 const lifecycleControlID = 1
 
 func (d ResourceDeletion) view() model.Deletion {
-	return model.Deletion{Family: d.Family, TenantID: d.TenantID, ResourceID: d.ResourceID, DeletedAt: d.DeletedAt.UTC(), PurgeAfter: d.PurgeAfter.UTC()}
+	return model.Deletion{
+		Family: d.Family, TenantID: d.TenantID, ResourceID: d.ResourceID,
+		DeletedAt: d.DeletedAt.UTC(), PurgeAfter: d.PurgeAfter.UTC(),
+		ExportSHA256: d.ExportSHA256, ConfirmedAt: utcTime(d.ConfirmedAt), PurgedAt: utcTime(d.PurgedAt),
+		PurgedWith: d.PurgedWith, Attempts: d.Attempts, Diagnostic: d.Diagnostic,
+	}
+}
+
+func utcTime(t *time.Time) *time.Time {
+	if t == nil {
+		return nil
+	}
+	utc := t.UTC()
+	return &utc
 }
 
 // WithLifecycle allows recording deletions, kept retention before their
@@ -112,7 +142,6 @@ func (s *Store) FreezeResource(ctx context.Context, scope model.CommonScope, key
 			return errors.WithStack(err)
 		}
 		if len(existing) == 1 {
-			out = existing[0].view()
 			return nil
 		}
 		item, err := tx.ReadProjection(ctx, scope, key)
@@ -129,6 +158,9 @@ func (s *Store) FreezeResource(ctx context.Context, scope model.CommonScope, key
 			if err := lastOrganizationOwner(db, key); err != nil {
 				return err
 			}
+		}
+		if err := platformAdmins(db, scope.Family, key); err != nil {
+			return err
 		}
 		if err := tx.authorizeFreeze(ctx, scope.Family, key, tenantID); err != nil {
 			return err
@@ -157,10 +189,13 @@ func (s *Store) FreezeResource(ctx context.Context, scope model.CommonScope, key
 		if err := auditFreeze(ctx, db, deletion); err != nil {
 			return err
 		}
-		out = deletion.view()
 		return nil
 	})
-	return out, err
+	if err != nil {
+		return out, err
+	}
+	// Read after commit: the suspension published at commit gives the ETag.
+	return s.ReadDeletion(ctx, scope, key)
 }
 
 // deactivate suspends the resource through the bound stores, so that its
@@ -204,6 +239,28 @@ func frozenParents(db *gorm.DB, scope model.CommonScope, tenantID string) error 
 	}
 	if n > 0 {
 		return errors.WithStack(port.ErrResourceDeleted)
+	}
+	return nil
+}
+
+// platformAdmins refuses to freeze a platform administrator, or a tenant
+// holding one: provisioning never acts on platform-wide privileges, and a
+// purge would remove the account.
+func platformAdmins(db *gorm.DB, family, key string) error {
+	column := "users.id"
+	switch family {
+	case model.FamilyTenant:
+		column = "users.tenant_id"
+	case model.FamilyOrganization:
+		return nil
+	}
+	var n int64
+	if err := db.Table("users").Joins("JOIN user_roles ur ON ur.user_id = users.id").
+		Where(column+" = ? AND ur.role = ?", key, model.PlatformRoleAdmin).Count(&n).Error; err != nil {
+		return errors.WithStack(err)
+	}
+	if n > 0 {
+		return errors.WithStack(port.ErrPlatformAdminProtected)
 	}
 	return nil
 }
@@ -300,26 +357,141 @@ func auditFreeze(ctx context.Context, db *gorm.DB, d ResourceDeletion) error {
 	return errors.WithStack(db.Create(&audit).Error)
 }
 
-// ReadDeletion implements port.LifecycleStore.
-func (s *Store) ReadDeletion(ctx context.Context, scope model.CommonScope, key string) (model.Deletion, error) {
+// deletionTenant returns the tenant of the deletion of a lifecycle resource.
+func deletionTenant(scope model.CommonScope, key string) (string, error) {
 	if _, ok := lifecycleTargets[scope.Family]; !ok {
-		return model.Deletion{}, errors.WithStack(port.ErrInvalid)
+		return "", errors.WithStack(port.ErrInvalid)
 	}
-	tenantID := scope.TenantID
+	if err := validateCommonScope(scope, key); err != nil || key == "" {
+		return "", errors.WithStack(port.ErrInvalid)
+	}
 	if scope.Family == model.FamilyTenant {
-		tenantID = key
+		return key, nil
+	}
+	return scope.TenantID, nil
+}
+
+// readDeletionRow reads the deletion of a resource within db, with the ETag
+// of the frozen resource while it is not purged.
+func readDeletionRow(db *gorm.DB, scope model.CommonScope, key string) (ResourceDeletion, model.Deletion, error) {
+	tenantID, err := deletionTenant(scope, key)
+	if err != nil {
+		return ResourceDeletion{}, model.Deletion{}, err
 	}
 	var rows []ResourceDeletion
-	err := s.readTransaction(ctx, func(db *gorm.DB) error {
-		return errors.WithStack(db.Where("family = ? AND resource_id = ? AND tenant_id = ?", scope.Family, key, tenantID).Limit(1).Find(&rows).Error)
-	})
-	if err != nil {
-		return model.Deletion{}, err
+	if err := db.Where("family = ? AND resource_id = ? AND tenant_id = ?", scope.Family, key, tenantID).Limit(1).Find(&rows).Error; err != nil {
+		return ResourceDeletion{}, model.Deletion{}, errors.WithStack(err)
 	}
 	if len(rows) == 0 {
-		return model.Deletion{}, errors.WithStack(port.ErrNotFound)
+		return ResourceDeletion{}, model.Deletion{}, errors.WithStack(port.ErrNotFound)
 	}
-	return rows[0].view(), nil
+	out := rows[0].view()
+	if rows[0].PurgedAt == nil {
+		var projections []ProvisioningProjection
+		if err := db.Where(projectionWhere, scope.Family, tenantID, "", key).Limit(1).Find(&projections).Error; err != nil {
+			return ResourceDeletion{}, model.Deletion{}, errors.WithStack(err)
+		}
+		if len(projections) == 1 {
+			out.ETag = model.CommonETag(projections[0].Revision)
+		}
+	}
+	return rows[0], out, nil
+}
+
+// ReadDeletion implements port.LifecycleStore.
+func (s *Store) ReadDeletion(ctx context.Context, scope model.CommonScope, key string) (model.Deletion, error) {
+	var out model.Deletion
+	err := s.readTransaction(ctx, func(db *gorm.DB) error {
+		var err error
+		_, out, err = readDeletionRow(db, scope, key)
+		return err
+	})
+	return out, err
+}
+
+// ConfirmDeletion implements port.LifecycleStore. The condition must
+// designate the revision of the frozen resource explicitly: a wildcard would
+// confirm an export the client never compared.
+func (s *Store) ConfirmDeletion(ctx context.Context, scope model.CommonScope, key string, condition model.MatchCondition, digest string) (model.Deletion, error) {
+	var out model.Deletion
+	if !condition.Present || condition.Any {
+		return out, errors.WithStack(port.ErrConfirmationRequired)
+	}
+	if !deletion.ValidDigest(digest) {
+		return out, errors.Wrap(port.ErrInvalid, "export_sha256 must be 64 lowercase hexadecimal characters")
+	}
+	if _, err := deletionTenant(scope, key); err != nil {
+		return out, err
+	}
+	if s.lifecycleRetention <= 0 {
+		return out, errors.WithStack(port.ErrLifecycleDisabled)
+	}
+	err := s.WithProvisioningTransaction(ctx, func(ptx port.ProvisioningTx) error {
+		tx := ptx.(*provisioningTx)
+		if err := tx.checkOwnership(ctx, scope.Family); err != nil {
+			return err
+		}
+		if isPostgres(tx.db) {
+			// Serializes the confirmations and the purge of the deletion.
+			var locked []ResourceDeletion
+			if err := tx.db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("family = ? AND resource_id = ?", scope.Family, key).Find(&locked).Error; err != nil {
+				return errors.WithStack(err)
+			}
+		}
+		row, deletion, err := readDeletionRow(tx.db, scope, key)
+		if err != nil {
+			return err
+		}
+		if row.PurgedAt != nil {
+			return errors.WithStack(port.ErrNotFound)
+		}
+		if !condition.Matches(deletion.ETag) {
+			return errors.WithStack(port.ErrPreconditionFailed)
+		}
+		if row.ConfirmedAt != nil {
+			if row.ExportSHA256 != digest {
+				return errors.Wrap(port.ErrExportMismatch, "another export is already confirmed")
+			}
+			out = deletion
+			return nil
+		}
+		now := tx.db.NowFunc().UTC().Truncate(time.Microsecond)
+		if err := tx.db.Model(&ResourceDeletion{}).Where("family = ? AND resource_id = ?", row.Family, row.ResourceID).
+			Updates(map[string]any{"confirmed_at": now, "export_sha256": digest}).Error; err != nil {
+			return errors.WithStack(err)
+		}
+		if err := auditDeletion(ctx, tx.db, row, map[string]any{"action": "export_confirmed", "export_sha256": digest}); err != nil {
+			return err
+		}
+		deletion.ConfirmedAt, deletion.ExportSHA256 = &now, digest
+		out = deletion
+		return nil
+	})
+	return out, err
+}
+
+// deletionAuditResource marks the audits of the lifecycle operations that
+// follow a freeze. The export leaves them out: it must not change once the
+// scope is frozen.
+const deletionAuditResource = "deletion"
+
+// auditDeletion records a lifecycle operation on a deletion.
+func auditDeletion(ctx context.Context, db *gorm.DB, d ResourceDeletion, after map[string]any) error {
+	actor := model.ActorFromContext(ctx)
+	actorJSON, err := json.Marshal(actor)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	after["resource_type"] = d.Family
+	encoded, err := json.Marshal(after)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	audit := MutationAudit{ID: uuid.NewString(), Actor: string(actorJSON), RequestID: actor.RequestID, TenantID: d.TenantID, Resource: deletionAuditResource, ResourceID: d.ResourceID, Before: "null", After: string(encoded)}
+	if d.Family == model.FamilyOrganization {
+		audit.OrgID = d.ResourceID
+	}
+	return errors.WithStack(db.Create(&audit).Error)
 }
 
 var _ port.LifecycleStore = &Store{}

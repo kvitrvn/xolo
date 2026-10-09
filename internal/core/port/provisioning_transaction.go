@@ -77,6 +77,10 @@ type ProvisioningBusinessStore interface {
 	GetProviderByID(ctx context.Context, id model.ProviderID) (model.Provider, error)
 	GetLLMModelByID(ctx context.Context, id model.LLMModelID) (model.LLMModel, error)
 	GetVirtualModelByID(ctx context.Context, id model.VirtualModelID) (model.VirtualModel, error)
+	DeleteApplication(ctx context.Context, appID model.ApplicationID) error
+	DeleteQuota(ctx context.Context, id model.QuotaID) error
+	DeleteAlert(ctx context.Context, id model.AlertID) error
+	DeleteProvider(ctx context.Context, id model.ProviderID) error
 }
 
 // ProvisioningTx must not escape the callback or perform external effects.

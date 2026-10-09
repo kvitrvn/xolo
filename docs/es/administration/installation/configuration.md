@@ -20,3 +20,14 @@ Un proveedor OIDC puede revocar sesiones mediante [OpenID Connect Back-Channel L
 - en modo multi-tenant sirve cualquier dominio activo. La ruta no está sujeta a la limitación por IP: cada solicitud se autentica con su token firmado.
 
 El cierre de sesión duradero solo cubre estas sesiones interactivas. Un ID token OIDC presentado a la API (`oidctoken`) sigue siendo válido hasta su `exp` más `XOLO_HTTP_AUTHN_OIDCTOKEN_EXPIRY_LEEWAY`; un token de acceso opaco (`oauth2token`) hasta que caduca su entrada de caché (`XOLO_HTTP_AUTHN_OAUTH2TOKEN_CACHE_TTL`, 60 s); una sesión `/auth/token/login` durante la vida de su cookie. Un cierre de sesión local no cierra la sesión en el proveedor de identidad. Consulte la [versión en francés](https://xolo-gateway.org/latest/) para más detalles.
+
+## Ciclo de vida de los recursos
+
+Eliminación diferida de tenants, organizaciones y miembros mediante la API de provisioning. Consulte [Ciclo de vida de los recursos](../provisioning/provisioning.md#ciclo-de-vida-de-los-recursos).
+
+| Variable | Por defecto | Descripción |
+| --- | --- | --- |
+| `XOLO_LIFECYCLE_ENABLED` | `false` | Permite registrar eliminaciones, instala las protecciones de los ámbitos congelados y ejecuta el worker de purga. |
+| `XOLO_LIFECYCLE_RETENTION` | `720h` | Tiempo durante el que un recurso eliminado permanece congelado antes de su purga, de 1 s a 3650 días. |
+| `XOLO_LIFECYCLE_POLL_INTERVAL` | `1m` | Frecuencia con la que el worker busca eliminaciones que purgar, de 1 s a 1 h. |
+| `XOLO_LIFECYCLE_PURGE_BATCH` | `1000` | Filas eliminadas por transacción de purga, de 1 a 100 000. |

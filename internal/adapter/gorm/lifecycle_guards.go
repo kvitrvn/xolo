@@ -13,7 +13,8 @@ import (
 // guards at startup.
 const lifecycleGuardsLock = 867530904
 
-// pgFrozenGuard refuses a write to a frozen scope. It takes no instance-wide
+// pgFrozenGuard refuses a write to a frozen scope, except from the purge
+// transaction, the only one to see its deletion purging. It takes no instance-wide
 // lock: it locks the rows of the tenant, organization and member of the
 // written row FOR KEY SHARE, like a foreign key check does, and a freeze
 // locks the row it freezes FOR UPDATE. A write therefore waits for a freeze
@@ -28,8 +29,8 @@ BEGIN
 	IF t IS NOT NULL THEN PERFORM 1 FROM tenants WHERE id = t FOR KEY SHARE; END IF;
 	IF o IS NOT NULL THEN PERFORM 1 FROM organizations WHERE id = o FOR KEY SHARE; END IF;
 	IF m IS NOT NULL THEN PERFORM 1 FROM users WHERE id = m FOR KEY SHARE; END IF;
-	IF EXISTS (SELECT 1 FROM resource_deletions d WHERE (d.family = 'tenant' AND d.resource_id = t)
-		OR (d.family = 'organization' AND d.resource_id = o) OR (d.family = 'member' AND d.resource_id = m)) THEN
+	IF EXISTS (SELECT 1 FROM resource_deletions d WHERE NOT d.purging AND ((d.family = 'tenant' AND d.resource_id = t)
+		OR (d.family = 'organization' AND d.resource_id = o) OR (d.family = 'member' AND d.resource_id = m))) THEN
 		RAISE EXCEPTION '` + frozenGuardMessage + `' USING ERRCODE = '` + frozenGuardCode + `';
 	END IF;
 END $$`

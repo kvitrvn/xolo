@@ -29,3 +29,34 @@ func TestParse_LifecycleRetention(t *testing.T) {
 		})
 	}
 }
+
+func TestParse_LifecyclePurge(t *testing.T) {
+	for _, c := range []struct {
+		name, interval, batch string
+		valid                 bool
+	}{
+		{"defaults", "", "", true},
+		{"bounds", "1h", "100000", true},
+		{"interval too short", "500ms", "", false},
+		{"interval too long", "2h", "", false},
+		{"empty batch", "", "0", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("XOLO_SECRET_KEY", testSecretKey)
+			t.Setenv("XOLO_LIFECYCLE_ENABLED", "true")
+			if c.interval != "" {
+				t.Setenv("XOLO_LIFECYCLE_POLL_INTERVAL", c.interval)
+			}
+			if c.batch != "" {
+				t.Setenv("XOLO_LIFECYCLE_PURGE_BATCH", c.batch)
+			}
+			conf, err := Parse()
+			if (err == nil) != c.valid {
+				t.Fatalf("got %v", err)
+			}
+			if c.name == "defaults" && (conf.Lifecycle.PollInterval != time.Minute || conf.Lifecycle.PurgeBatch != 1000) {
+				t.Errorf("unexpected defaults: %+v", conf.Lifecycle)
+			}
+		})
+	}
+}

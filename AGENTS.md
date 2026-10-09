@@ -140,9 +140,13 @@ itself. Only the mTLS middleware sets `model.WithWriteAuthority`.
 Resource lifecycle (`XOLO_LIFECYCLE_*`, `internal/adapter/gorm/lifecycle*.go`):
 recording a deletion freezes the scope of a tenant, organization or member,
 enforced by database triggers installed only when enabled. A new table holding
-a tenant, organization or user link must be added to `lifecycleTables`, and a
+a tenant, organization or user link must be added to `lifecycleTables` (with
+its `key` and `secret` columns) and to `purgeOrder`, children first, and a
 background writer must skip the frozen scopes (`notFrozen`). The guards lock
-parent rows FOR KEY SHARE, never an instance-wide lock.
+parent rows FOR KEY SHARE, never an instance-wide lock. Only a purge
+transaction may write a frozen scope: it sets `resource_deletions.purging` on
+its tenant and clears it before commit (`lifecycle_purge.go`). The purge never
+raises the feed floor nor touches another tenant's webhooks.
 Webhooks (`internal/adapter/gorm/webhook_store.go`) read that feed without
 its lock — it is prefix-closed — filtered by tenant in SQL, and coordinate
 replicas through conditional updates (subscription `revision`, delivery

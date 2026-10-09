@@ -44,6 +44,9 @@ func (s *stubTenantStore) ListTenantDomains(context.Context, model.TenantID) ([]
 }
 
 func (s *stubTenantStore) SaveDomain(context.Context, model.Domain) error { return nil }
+func (s *stubTenantStore) DeleteDomain(context.Context, model.TenantID, string) error {
+	return nil
+}
 
 func (s *stubTenantStore) GetTenantBySlug(_ context.Context, slug string) (model.Tenant, error) {
 	s.calls++

@@ -87,6 +87,12 @@ En cas d'échec de la mise en place, le journal du serveur est imprimé.
 |---|---|
 | `TestOIDCDurableSession` | un serveur dédié, configuré avec un fournisseur OIDC factice (`httptest` : discovery, authorize, token, userinfo, JWKS), ouvre une session à la connexion ; le cookie reste valide après un redémarrage ; un `logout_token` signé envoyé sur `/auth/oidc/providers/fakeidp/backchannel-logout` le révoque ; le rejeu du même jeton répond 200 sans toucher la session suivante, un jeton invalide répond 400 |
 
+### Cycle de vie (`lifecycle_test.go`)
+
+| Test | Attendu |
+|---|---|
+| `TestLifecyclePurge` | un serveur dédié, multi-tenant, cycle de vie activé (rétention et sondage d'une seconde) : un tenant provisionné avec une organisation et un membre est supprimé (`DELETE` → 202 et `ETag`), son export se vérifie et se confirme avec son condensat ; le worker le purge, le tenant répond 404, son identifiant est refusé à la réutilisation (409 `resource_deleted`) et seul `tenant.deleted.v1` reste dans le flux à son sujet |
+
 Le pseudonymizer est branché par trois middlewares (`mw-e2e-pseudo-tag`,
 `mw-e2e-pseudo-hash`, `mw-e2e-pseudo-claude`) enveloppant chacun un seul modèle ; les autres scénarios
 passent par des modèles virtuels dédiés, tous déclarés dans `fixtures_test.go`

@@ -242,6 +242,10 @@ func NewHTTPServerFromConfig(ctx context.Context, conf *config.Config) (*http.Se
 		return nil, errors.Wrap(err, "could not start oidc session sweep from config")
 	}
 
+	if _, err := startLifecyclePurgeFromConfig(ctx, conf); err != nil {
+		return nil, errors.Wrap(err, "could not start lifecycle purge from config")
+	}
+
 	invitationService, err := getInvitationServiceFromConfig(ctx, conf)
 	if err != nil {
 		return nil, errors.Wrap(err, "could not create invitation service")

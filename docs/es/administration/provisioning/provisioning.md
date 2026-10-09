@@ -67,11 +67,15 @@ Los webhooks tienen sus propias variables, véase [Webhooks](#webhooks).
 | `PUT` | `/v1/tenants/{tenantID}/organizations/{orgID}` | `{"slug","name","status"}` |
 | `PUT` | `/v1/tenants/{tenantID}/members/{memberID}` | `{"email","tenant_role","status"}`, `"display_name"` e `"identity"` opcionales |
 | `PUT` | `/v1/tenants/{tenantID}/organizations/{orgID}/members/{memberID}` | `{"role","status"}` |
+| `DELETE` | `/v1/tenants/{tenantID}/domains/{hostname}` | — eliminado de inmediato, `204` |
+| `DELETE` | `/v1/tenants/{tenantID}/organizations/{orgID}/members/{memberID}` | — eliminada de inmediato, `204` |
+| `DELETE` | `/v1/tenants/{tenantID}`, `…/organizations/{orgID}`, `…/members/{memberID}` | — eliminación registrada, purga diferida: véase [Ciclo de vida de los recursos](#ciclo-de-vida-de-los-recursos) |
 
 Cada uno de estos recursos también puede leerse, listarse y seguirse mediante
 el flujo de eventos: consulte [Lecturas, condiciones y sincronización](#lecturas-condiciones-y-sincronizacion).
 `capabilities` enumera `adoption`, `business_resources`, `conditional_writes`,
-`events`, `identity`, `ownership` y `reads`, más `webhooks` cuando están activados.
+`events`, `identity`, `ownership` y `reads`, más `webhooks` y `lifecycle` cuando
+están activados.
 Trátela como un conjunto: su orden no es significativo.
 
 - **Los identificadores** son UUID canónicos en minúsculas elegidos por el
@@ -529,13 +533,12 @@ eventos. El manifiesto anuncia `business_resources`.
 
 | Método | Ruta |
 |---|---|
-| `GET`, `GET`, `PUT` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/roles[/{key}]` |
-| `GET`, `GET`, `PUT` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/applications[/{key}]` |
-| `GET`, `GET`, `PUT` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/alerts[/{key}]` |
-| `GET`, `GET`, `PUT` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/providers[/{key}]` |
-| `GET`, `GET`, `PUT` | `/v1/xolo/tenants/{tenantID}/quotas[/{key}]` |
+| `GET`, `GET`, `PUT`, `DELETE` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/roles[/{key}]` |
+| `GET`, `GET`, `PUT`, `DELETE` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/applications[/{key}]` |
+| `GET`, `GET`, `PUT`, `DELETE` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/alerts[/{key}]` |
+| `GET`, `GET`, `PUT`, `DELETE` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/providers[/{key}]` |
+| `GET`, `GET`, `PUT`, `DELETE` | `/v1/xolo/tenants/{tenantID}/quotas[/{key}]` |
 | `POST` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/roles` — crea un rol personalizado con una clave elegida por el servidor; responde `201` con `{key, representation, etag}` |
-| `DELETE` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/roles/{key}` — elimina un rol personalizado (`204`) |
 | `GET` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/roles/builtin` — los roles integrados, `{"items":[{"id","builtin_kind","name"}]}`, para `PUT …/members/{membershipID}/roles` |
 
 Las representaciones están en snake_case y son completas: cada campo es
@@ -578,9 +581,15 @@ obligatorio, `null` solo donde se indica.
   ni en claro en la auditoría: una rotación no cambia ningún `ETag` ni publica
   ningún evento, pero la auditoría registra el cambio de una huella del
   cifrado.
-- **Sin eliminación mediante el contrato**, salvo los roles personalizados: las
-  eliminaciones llegarán con el ciclo de vida de los recursos. Los tokens de
-  aplicación siguen gestionándose localmente.
+- **Las eliminaciones son inmediatas**: `DELETE …/{key}` responde `204`, con
+  un `If-Match` opcional, y publica `<family>.deleted.v1`. Eliminar un recurso
+  ausente, o el de otra organización, no cambia nada, salvo que `If-Match`
+  designe una revisión (`412`). Eliminar una aplicación retira sus roles, sus
+  tokens y su cuota; un proveedor, sus modelos; una cuota conserva el consumo
+  registrado en su ámbito. Un rol integrado se rechaza (`409 conflict`). Un
+  ámbito congelado las rechaza todas (`409 resource_deleted`). No dependen de
+  `XOLO_LIFECYCLE_ENABLED`. Los tokens de aplicación siguen gestionándose
+  localmente.
 - Las escrituras de la interfaz web también publican sus eventos. La migración
   `202610120001` proyecta los recursos de negocio existentes sin publicar
   eventos; como las anteriores, exige detener todos los servidores.
@@ -739,22 +748,54 @@ que migró la base de datos.
 
 ## Ciclo de vida de los recursos
 
-La base para eliminar tenants, organizaciones y miembros está lista; ninguna
-ruta la expone todavía. Eliminar un recurso así empieza por registrar su
-eliminación, que **congela** el recurso y todo lo que contiene hasta su purga.
+Los dominios, las pertenencias y los recursos de negocio se eliminan de
+inmediato. Un tenant, una organización o un miembro contiene datos que un
+cliente puede necesitar conservar: su eliminación es diferida. `DELETE` la
+registra, lo que **congela** el recurso y todo lo que contiene; el cliente
+exporta el ámbito, confirma la exportación con su resumen, y la instancia
+purga el ámbito una vez transcurrida la retención.
 
 | Variable | Por defecto | Descripción |
 |---|---|---|
-| `XOLO_LIFECYCLE_ENABLED` | `false` | Permite registrar eliminaciones e instala las protecciones en base de datos de los ámbitos congelados |
+| `XOLO_LIFECYCLE_ENABLED` | `false` | Permite registrar eliminaciones, instala las protecciones en base de datos de los ámbitos congelados y ejecuta el worker de purga |
 | `XOLO_LIFECYCLE_RETENTION` | `720h` | Tiempo durante el que un recurso eliminado permanece congelado antes de poder purgarse, de 1 s a 3650 días |
+| `XOLO_LIFECYCLE_POLL_INTERVAL` | `1m` | Frecuencia con la que el worker de purga busca eliminaciones vencidas, de 1 s a 1 h |
+| `XOLO_LIFECYCLE_PURGE_BATCH` | `1000` | Filas eliminadas por una transacción de purga, de 1 a 100 000 |
+
+Con `P` una de las rutas `/v1/tenants/{tenantID}`,
+`/v1/tenants/{tenantID}/organizations/{orgID}` y
+`/v1/tenants/{tenantID}/members/{memberID}`:
+
+| Método | Ruta | Respuesta |
+|---|---|---|
+| `DELETE` | `P`, `If-Match` opcional | `202` con la eliminación y el `ETag` del recurso congelado; un `DELETE` repetido devuelve la misma eliminación |
+| `GET` | `P/deletion` | `200` con la eliminación y su `ETag` |
+| `GET` | `P/deletion/export` | `200`, la exportación del ámbito como flujo NDJSON |
+| `POST` | `P/purge-confirmation`, `If-Match` obligatorio, `{"export_sha256": "…"}` | `200` con la eliminación confirmada |
+
+Una eliminación se lee así:
+
+```json
+{"resource_type":"organization","tenant_id":"…","resource_id":"…",
+ "deleted_at":"…","purge_after":"…","etag":"W/\"42\"",
+ "export_sha256":"…","confirmed_at":"…","purged_at":"…","attempts":0,"diagnostic":"purged"}
+```
+
+`etag` está presente hasta la purga; `export_sha256` y `confirmed_at` una vez
+confirmada la exportación; `purged_at`, y `purged_with` para un recurso
+purgado con su tenant, una vez hecha la purga. `diagnostic` vale
+`purge_failed` tras un intento fallido, que el worker repite.
 
 - **Congelar** un recurso lo desactiva, lo que lo publica como `suspended`
   con un evento `updated`, y registra su eliminación en la misma transacción.
   Comprueba la condición `If-Match` y la autoridad de escritura de cada
   familia que contiene el ámbito. Rechaza el último propietario activo de un
-  tenant o de una organización viva (`409 last_owner`) y el tenant `default`.
-  Un tenant congelado pierde enseguida sus sesiones OIDC; un miembro congelado
-  las conserva, pero su cuenta desactivada se rechaza en cada petición.
+  tenant o de una organización viva (`409 last_owner`), el tenant `default`,
+  y un administrador de plataforma o un tenant que lo contenga
+  (`409 platform_admin_protected`). Un tenant congelado pierde enseguida sus
+  sesiones OIDC; un miembro congelado las conserva, pero su cuenta desactivada
+  se rechaza en cada petición. El `ETag` de la eliminación es la revisión del
+  recurso congelado: ya no cambia.
 - **Un ámbito congelado es de solo lectura.** Toda escritura de una fila que
   contiene se rechaza, sea quien sea su autor: API (`409 resource_deleted`),
   interfaz web (`403`), workers y SQL directo. Abarca el tenant, sus dominios,
@@ -766,18 +807,76 @@ eliminación, que **congela** el recurso y todo lo que contiene hasta su purga.
   suscripciones ya no pueden cambiar; la desvinculación las conserva. La
   evaluación de alertas y la expulsión de eventos ignoran los ámbitos
   congelados.
+- **La exportación** (`xolo-deletion/1`) contiene cada fila del ámbito, tabla
+  por tabla, y las auditorías de sus recursos, leídas en una sola instantánea
+  y transmitidas fila a fila. Los secretos quedan fuera: claves de los
+  proveedores, valores de los tokens, secretos de los plugins y de los
+  webhooks, sesiones OIDC y entregas en cola.
+
+  ```
+  {"format":"xolo-deletion/1","source":…,"deletion":{…,"etag":…}}
+  {"table":"organizations","row":{…}}          (una por fila)
+  {"count":…,"complete":true,"sha256":…}
+  ```
+
+  El SHA-256 del trailer cubre todas las líneas anteriores, saltos de línea
+  incluidos; una exportación sin trailer fue interrumpida. Nada en ella
+  depende del momento en que se produce: dos exportaciones de la misma
+  eliminación dan los mismos bytes.
+- **La confirmación** lleva el `sha256` del trailer, bajo un `If-Match`
+  explícito sobre la eliminación (`*` o su ausencia dan
+  `428 precondition_required`). El servidor vuelve a exportar el ámbito y
+  compara: un resumen distinto da `409 export_mismatch`. Ocurre cuando la
+  purga de otra eliminación ha retirado entretanto filas de este ámbito, por
+  ejemplo un miembro de una organización eliminada purgado primero: vuelva a
+  exportar y confirme el nuevo resumen. Una confirmación repetida con el mismo
+  resumen devuelve la eliminación; otro resumen, una vez confirmada, da
+  `409 export_mismatch`.
+- **La purga** se ejecuta en cada réplica, cada
+  `XOLO_LIFECYCLE_POLL_INTERVAL`, sobre las eliminaciones confirmadas cuyo
+  `purge_after` ha pasado. Cambiar `XOLO_LIFECYCLE_RETENTION` nunca acorta una
+  eliminación ya registrada. Un tenant se lleva las eliminaciones de sus
+  organizaciones y miembros. La purga retira, en transacciones cortas que
+  reanuda tras una caída:
+  1. las proyecciones del ámbito, los eventos que las conciernen y las
+     entregas webhook en cola para esos eventos, y luego publica
+     `<family>.deleted.v1`: un tenant solo para sí mismo, una organización
+     para sí y las cuotas que tenía, un miembro para sí, sus pertenencias, su
+     cuota y sus alertas personales;
+  2. cada fila del ámbito, primero los hijos, por lotes de
+     `XOLO_LIFECYCLE_PURGE_BATCH`;
+  3. las auditorías de sus recursos. Las auditorías de las operaciones de un
+     miembro purgado se conservan, con un actor anonimizado; las alertas
+     compartidas de las que era propietario pierden su propietario
+     (`alert.updated.v1`).
+- **El suelo del flujo nunca se mueve.** Los eventos retirados dejan un hueco
+  en la secuencia, que ningún consumidor necesita: el evento `deleted` final
+  da el resultado. Ninguna otra suscripción pierde su historial ni sus
+  entregas en cola.
+- **Los identificadores se retiran.** Una eliminación purgada sigue
+  registrada, junto con las de las organizaciones y miembros de un tenant
+  purgado: sus UUID se rechazan para siempre (`409 resource_deleted`), para
+  que ningún cliente confunda un recurso nuevo con el purgado. No se conserva
+  nada más: ni email, ni identidad.
 - **Las protecciones** son triggers, instalados al arrancar solo si el ciclo
   de vida está activado. Desactivado, se retiran, salvo que haya una
   eliminación registrada: una instancia que nunca congeló nada no paga nada, y
-  los congelamientos existentes siguen protegidos.
+  los congelamientos existentes siguen protegidos. Desactivado, las rutas
+  responden `409 lifecycle_disabled` y no se purga nada.
 - **Ningún bloqueo global.** Un congelamiento bloquea la fila que congela; una
   escritura bloquea las filas de su tenant, organización y miembro, como lo
   hace una clave foránea. Una escritura solo espera un congelamiento de su
-  propio ámbito y luego falla; una escritura confirmada antes se conserva.
+  propio ámbito y luego falla; una escritura confirmada antes se conserva. Una
+  transacción de purga bloquea su eliminación y las de su tenant, cuyas
+  protecciones solo ella omite hasta confirmarse; la purga de un tenant nunca
+  espera a otro tenant.
 
 Una organización suspendida ya no concede nada: sus pertenencias, los permisos
 de sus aplicaciones y sus tokens se rechazan, y el proxy no sirve ninguno de
 sus modelos, administradores de plataforma incluidos.
+
+La interfaz web sigue eliminando tenants, organizaciones y miembros de
+inmediato, sin exportación.
 
 ## Errores
 
@@ -796,6 +895,8 @@ Todos los errores comparten el formato `{"error":{"code":"…","message":"…"}}
 | `ownership_denied` | 403 | La política de autoridad reserva la familia a la instancia local |
 | `resource_deleted` | 409 | El recurso, o un recurso que lo contiene, está congelado por su eliminación |
 | `lifecycle_disabled` | 409 | Eliminación de un tenant, una organización o un miembro con `XOLO_LIFECYCLE_ENABLED` desactivado |
+| `export_mismatch` | 409 | El resumen confirmado no es el de la exportación actual, u otro resumen ya está confirmado |
+| `purge_not_ready` | 409 | La eliminación no está confirmada, o su retención no ha transcurrido |
 | `not_found` | 404 | Recurso o ruta desconocidos, o recurso de otro tenant u otra organización |
 | `parent_not_found` | 404 | El tenant, la organización o el miembro del que depende el recurso no existe en ese ámbito |
 | `method_not_allowed` | 405 | Recurso conocido, método incorrecto |
@@ -806,6 +907,7 @@ Todos los errores comparten el formato `{"error":{"code":"…","message":"…"}}
 | `webhook_capacity` | 409 | El tenant ya tiene el número máximo de suscripciones webhook |
 | `cursor_expired` | 410 | Cursor de lista de más de 24 horas, o cursor de eventos anterior a los eventos conservados: reconstruya |
 | `precondition_failed` | 412 | `If-Match` no designa la revisión actual |
+| `precondition_required` | 428 | Confirmación de purga sin `If-Match` explícito |
 | `unprocessable` | 422 | Valor bien formado pero rechazado por el dominio |
 | `rate_limited` | 429 | Presupuesto por URI superado; reintente tras los segundos de `Retry-After` |
 | `internal_error` | 500 | Error inesperado |
@@ -837,6 +939,8 @@ archivos, detalles TLS y secretos nunca llegan al cliente.
   organización o un usuario de otro tenant.
 - El tenant `default` conserva su slug y sigue activo.
 - Los roles integrados no se pueden modificar ni eliminar.
+- El identificador de un tenant, una organización o un miembro purgado nunca se
+  reutiliza.
 - Solo se aceptan los códigos de permiso del catálogo RBAC.
 
 ## Migración desde las rutas anteriores
@@ -851,15 +955,15 @@ identificadores no cambian: un recurso existente se direcciona con su UUID actua
 | `POST /v1/tenants` `{slug, name, description, active}` | `PUT /v1/tenants/{tenantID}` `{slug, name, status}` con un UUID elegido por usted; `description` mediante `PATCH /v1/xolo/tenants/{tenantID}` |
 | `GET /v1/tenants/{tenantID}` | `GET /v1/xolo/tenants/{tenantID}` |
 | `PATCH /v1/tenants/{tenantID}` `{name, description, active}` | `PATCH /v1/xolo/tenants/{tenantID}` (mismo cuerpo), o `PUT /v1/tenants/{tenantID}` `{slug, name, status}` |
-| `DELETE /v1/tenants/{tenantID}` | Eliminada: `PUT /v1/tenants/{tenantID}` con `"status": "suspended"` |
+| `DELETE /v1/tenants/{tenantID}` | Misma ruta, ahora diferida: `202`, luego exportación, confirmación y purga, véase [Ciclo de vida de los recursos](#ciclo-de-vida-de-los-recursos); `PUT /v1/tenants/{tenantID}` con `"status": "suspended"` para solo suspender |
 | `GET /v1/tenants/{tenantID}/organizations[/{orgID}]` | `GET /v1/xolo/tenants/{tenantID}/organizations[/{orgID}]` |
 | `POST /v1/tenants/{tenantID}/organizations` `{slug, name, description, currency, active, owner}` | `PUT /v1/tenants/{tenantID}/organizations/{orgID}` `{slug, name, status}`; `description` y `currency` mediante `PATCH /v1/xolo/…/organizations/{orgID}`; el propietario mediante `PUT …/organizations/{orgID}/members/{userID}` `{"role": "owner", "status": "active"}`, una vez declarado con `PUT …/members/{userID}` |
 | `PATCH /v1/tenants/{tenantID}/organizations/{orgID}` | `PATCH /v1/xolo/tenants/{tenantID}/organizations/{orgID}` (mismo cuerpo) |
-| `DELETE /v1/tenants/{tenantID}/organizations/{orgID}` | Eliminada: `PUT …/organizations/{orgID}` con `"status": "suspended"` |
+| `DELETE /v1/tenants/{tenantID}/organizations/{orgID}` | Misma ruta, ahora diferida como un tenant; `PUT …/organizations/{orgID}` con `"status": "suspended"` para solo suspender |
 | `GET …/organizations/{orgID}/members[/{membershipID}]` | `GET /v1/xolo/…/organizations/{orgID}/members[/{membershipID}]` |
 | `POST …/organizations/{orgID}/members` `{userId \| user, roleIds, builtinRoles}` | `PUT /v1/tenants/{tenantID}/organizations/{orgID}/members/{userID}` `{role, status}`; roles personalizados mediante `PUT /v1/xolo/…/members/{membershipID}/roles` |
 | `PUT …/members/{membershipID}/roles` | `PUT /v1/xolo/…/members/{membershipID}/roles` (mismo cuerpo) |
-| `DELETE …/members/{membershipID}` | Eliminada: `PUT …/organizations/{orgID}/members/{userID}` con `"status": "suspended"` |
+| `DELETE …/members/{membershipID}` | `DELETE /v1/tenants/{tenantID}/organizations/{orgID}/members/{userID}`, por el UUID del miembro: `204`; `PUT …` con `"status": "suspended"` para solo suspender |
 | `…/organizations/{orgID}/roles[/{roleID}]` (todos los métodos) | `/v1/xolo/…/organizations/{orgID}/roles[/{key}]`, con los cambios siguientes |
 | `GET /v1/xolo/…/roles` (integrados y personalizados, `roleDTO` en camelCase) | `GET /v1/xolo/…/roles` enumera los roles personalizados como página de proyecciones; los roles integrados mediante `GET /v1/xolo/…/roles/builtin` |
 | `GET /v1/xolo/…/roles/{roleID}` (`roleDTO` en camelCase) | Misma ruta: la representación snake_case y su `ETag` |
@@ -980,5 +1084,4 @@ En producción, utilice una autoridad de certificación gestionada (Vault, cert-
 
 - Los modelos LLM, modelos virtuales, middlewares, tokens de aplicación y parámetros de eventos: siguen gestionándose desde la interfaz web.
 - Los alcances por certificado: cualquier URI autorizado administra la instancia completa.
-- Eliminar tenants, dominios, organizaciones, pertenencias o recursos de negocio distintos de los roles personalizados: suspéndalos o desactívelos.
 - Todavía no se genera ninguna especificación OpenAPI.

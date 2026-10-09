@@ -32,6 +32,21 @@ func (s *Store) SetQuota(ctx context.Context, quota model.Quota) error {
 	})
 }
 
+// DeleteQuota implements port.ProvisioningBusinessStore. The spend recorded
+// on its scope is kept: a quota set again later starts from it.
+func (s *Store) DeleteQuota(ctx context.Context, id model.QuotaID) error {
+	return s.recorded(ctx, tracking("quota", string(id)), func(ctx context.Context, db *gorm.DB) error {
+		result := db.Delete(&Quota{}, "id = ?", string(id))
+		if result.Error != nil {
+			return errors.WithStack(result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return errors.WithStack(port.ErrNotFound)
+		}
+		return nil
+	})
+}
+
 // GetQuotaByID implements port.ProvisioningBusinessStore.
 func (s *Store) GetQuotaByID(ctx context.Context, id model.QuotaID) (model.Quota, error) {
 	var q Quota

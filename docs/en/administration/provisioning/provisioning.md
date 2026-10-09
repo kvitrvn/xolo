@@ -71,11 +71,15 @@ Webhooks have their own variables, see [Webhooks](#webhooks).
 | `PUT` | `/v1/tenants/{tenantID}/organizations/{orgID}` | `{"slug","name","status"}` |
 | `PUT` | `/v1/tenants/{tenantID}/members/{memberID}` | `{"email","tenant_role","status"}`, optional `"display_name"` and `"identity"` |
 | `PUT` | `/v1/tenants/{tenantID}/organizations/{orgID}/members/{memberID}` | `{"role","status"}` |
+| `DELETE` | `/v1/tenants/{tenantID}/domains/{hostname}` | — removed at once, `204` |
+| `DELETE` | `/v1/tenants/{tenantID}/organizations/{orgID}/members/{memberID}` | — removed at once, `204` |
+| `DELETE` | `/v1/tenants/{tenantID}`, `…/organizations/{orgID}`, `…/members/{memberID}` | — deletion recorded, purged later: see [Resource lifecycle](#resource-lifecycle) |
 
 Each of these resources is also readable, listable and followed through the
 event feed: see [Reads, conditions and synchronization](#reads-conditions-and-synchronization).
 `capabilities` lists `adoption`, `business_resources`, `conditional_writes`,
-`events`, `identity`, `ownership` and `reads`, plus `webhooks` when enabled.
+`events`, `identity`, `ownership` and `reads`, plus `webhooks` and `lifecycle`
+when enabled.
 Treat it as a set: its order is not significant.
 
 - **Identifiers** are canonical lowercase UUIDs chosen by the client. Anything
@@ -514,13 +518,12 @@ events. The manifest announces `business_resources`.
 
 | Method | Route |
 |---|---|
-| `GET`, `GET`, `PUT` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/roles[/{key}]` |
-| `GET`, `GET`, `PUT` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/applications[/{key}]` |
-| `GET`, `GET`, `PUT` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/alerts[/{key}]` |
-| `GET`, `GET`, `PUT` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/providers[/{key}]` |
-| `GET`, `GET`, `PUT` | `/v1/xolo/tenants/{tenantID}/quotas[/{key}]` |
+| `GET`, `GET`, `PUT`, `DELETE` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/roles[/{key}]` |
+| `GET`, `GET`, `PUT`, `DELETE` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/applications[/{key}]` |
+| `GET`, `GET`, `PUT`, `DELETE` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/alerts[/{key}]` |
+| `GET`, `GET`, `PUT`, `DELETE` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/providers[/{key}]` |
+| `GET`, `GET`, `PUT`, `DELETE` | `/v1/xolo/tenants/{tenantID}/quotas[/{key}]` |
 | `POST` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/roles` — creates a custom role under a key chosen by the server; answers `201` with `{key, representation, etag}` |
-| `DELETE` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/roles/{key}` — deletes a custom role (`204`) |
 | `GET` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/roles/builtin` — the builtin roles, `{"items":[{"id","builtin_kind","name"}]}`, for `PUT …/members/{membershipID}/roles` |
 
 Representations are snake_case and complete: every field is required, `null`
@@ -560,8 +563,14 @@ only where shown.
   response, a projection, an event nor in clear in the audit: a rotation
   changes no `ETag` and publishes no event, but the audit records the change
   of a fingerprint of the ciphertext.
-- **Not deleted through the contract**, custom roles aside: deletions arrive
-  with the resource lifecycle. Application tokens stay managed locally.
+- **Deletions are immediate**: `DELETE …/{key}` answers `204`, with an
+  optional `If-Match`, and publishes `<family>.deleted.v1`. Deleting a missing
+  resource, or one of another organization, changes nothing, unless `If-Match`
+  designates a revision (`412`). Deleting an application removes its role
+  assignments, tokens and quota; a provider its models; a quota keeps the
+  spend recorded on its scope. A builtin role is refused (`409 conflict`). A
+  frozen scope refuses them all (`409 resource_deleted`). They do not depend
+  on `XOLO_LIFECYCLE_ENABLED`. Application tokens stay managed locally.
 - The web UI writes publish their events as well. Migration `202610120001`
   projects the existing business resources without publishing any event;
   like the previous ones, it requires every server to be stopped.
@@ -709,22 +718,53 @@ database.
 
 ## Resource lifecycle
 
-The groundwork for deleting tenants, organizations and members is in place;
-no route exposes it yet. Deleting such a resource first records its deletion,
-which **freezes** the resource and everything it holds until its purge.
+Domains, memberships and business resources are deleted at once. A tenant,
+an organization or a member holds data a client may need to keep: its
+deletion is deferred. `DELETE` records it, which **freezes** the resource and
+everything it holds; the client exports the scope, confirms the export with
+its digest, and the instance purges the scope once the retention has
+elapsed.
 
 | Variable | Default | Description |
 |---|---|---|
-| `XOLO_LIFECYCLE_ENABLED` | `false` | Allows recording deletions, and installs the database guards of the frozen scopes |
+| `XOLO_LIFECYCLE_ENABLED` | `false` | Allows recording deletions, installs the database guards of the frozen scopes and runs the purge worker |
 | `XOLO_LIFECYCLE_RETENTION` | `720h` | How long a deleted resource stays frozen before it may be purged, 1 s to 3650 days |
+| `XOLO_LIFECYCLE_POLL_INTERVAL` | `1m` | How often the purge worker looks for due deletions, 1 s to 1 h |
+| `XOLO_LIFECYCLE_PURGE_BATCH` | `1000` | Rows removed by one purge transaction, 1 to 100 000 |
+
+With `P` one of `/v1/tenants/{tenantID}`,
+`/v1/tenants/{tenantID}/organizations/{orgID}` and
+`/v1/tenants/{tenantID}/members/{memberID}`:
+
+| Method | Route | Answer |
+|---|---|---|
+| `DELETE` | `P`, optional `If-Match` | `202` with the deletion and the `ETag` of the frozen resource; a repeated `DELETE` returns the same deletion |
+| `GET` | `P/deletion` | `200` with the deletion and its `ETag` |
+| `GET` | `P/deletion/export` | `200`, the export of the scope as an NDJSON stream |
+| `POST` | `P/purge-confirmation`, `If-Match` required, `{"export_sha256": "…"}` | `200` with the confirmed deletion |
+
+A deletion reads:
+
+```json
+{"resource_type":"organization","tenant_id":"…","resource_id":"…",
+ "deleted_at":"…","purge_after":"…","etag":"W/\"42\"",
+ "export_sha256":"…","confirmed_at":"…","purged_at":"…","attempts":0,"diagnostic":"purged"}
+```
+
+`etag` is present until the purge; `export_sha256` and `confirmed_at` once
+confirmed; `purged_at`, and `purged_with` for a resource purged with its
+tenant, once purged. `diagnostic` is `purge_failed` after a failed attempt,
+which the worker retries.
 
 - **Freezing** a resource deactivates it, which publishes it as `suspended`
   with an `updated` event, and records its deletion in the same transaction.
   It checks the `If-Match` condition and the write authority of every family
   the scope holds. It refuses the last active owner of a tenant or of a live
-  organization (`409 last_owner`) and the `default` tenant. A frozen tenant
-  loses its OIDC sessions at once; a frozen member keeps them, but its
-  deactivated account is refused on every request.
+  organization (`409 last_owner`), the `default` tenant, and a platform
+  administrator or a tenant holding one (`409 platform_admin_protected`). A
+  frozen tenant loses its OIDC sessions at once; a frozen member keeps them,
+  but its deactivated account is refused on every request. The `ETag` of the
+  deletion is the revision of the frozen resource: it no longer changes.
 - **A frozen scope is read-only.** Every write to a row it holds is refused,
   whoever makes it: API (`409 resource_deleted`), web UI (`403`), workers, and
   raw SQL. That covers the tenant, its domains, organizations and users; an
@@ -734,18 +774,67 @@ which **freezes** the resource and everything it holds until its purge.
   can not be undone. Webhooks of a frozen tenant are no longer prepared nor
   delivered, and its subscriptions can not change; detaching keeps them.
   Alert evaluation and event eviction skip the frozen scopes.
+- **The export** (`xolo-deletion/1`) holds every row of the scope, table by
+  table, and the audits of its resources, read on one snapshot and streamed
+  one row at a time. Secrets are left out: provider keys, token values,
+  plugin secrets, webhook secrets, OIDC sessions and queued deliveries.
+
+  ```
+  {"format":"xolo-deletion/1","source":…,"deletion":{…,"etag":…}}
+  {"table":"organizations","row":{…}}          (one per row)
+  {"count":…,"complete":true,"sha256":…}
+  ```
+
+  The SHA-256 of the trailer covers every line before it, newlines included;
+  an export without trailer was cut. Nothing in it depends on the time it is
+  made: two exports of the same deletion give the same bytes.
+- **The confirmation** carries the `sha256` of the trailer, under an explicit
+  `If-Match` on the deletion (`*` or none is `428 precondition_required`). The
+  server exports the scope again and compares: a different digest is
+  `409 export_mismatch`. That happens when the purge of another deletion
+  removed rows of this scope in between, for instance a member of a deleted
+  organization purged first: export again and confirm the new digest. A
+  repeated confirmation with the same digest returns the deletion; another
+  digest, once confirmed, is `409 export_mismatch`.
+- **The purge** runs on every replica, every `XOLO_LIFECYCLE_POLL_INTERVAL`,
+  on the deletions confirmed whose `purge_after` has passed. Changing
+  `XOLO_LIFECYCLE_RETENTION` never shortens a deletion already recorded. A
+  tenant takes along the deletions of its organizations and members. The purge
+  removes, in short transactions it can resume after a crash:
+  1. the projections of the scope, the events about them and the webhook
+     deliveries queued for those events, then publishes `<family>.deleted.v1`:
+     a tenant for itself only, an organization for itself and the quotas it
+     held, a member for itself, its memberships, quota and personal alerts;
+  2. every row of the scope, children first, `XOLO_LIFECYCLE_PURGE_BATCH` at a
+     time;
+  3. the audits of its resources. The audits of the operations a purged
+     member made stay, with an anonymized actor; the shared alerts it owned
+     lose their owner (`alert.updated.v1`).
+- **The feed floor never moves.** The events removed leave a gap in the
+  sequence, which no consumer needs: the final `deleted` event tells the
+  outcome. No other subscription loses its history, nor its queued deliveries.
+- **Identifiers are retired.** A purged deletion stays recorded, with those of
+  the organizations and members of a purged tenant: their UUIDs are refused
+  forever (`409 resource_deleted`), so no client mistakes a new resource for
+  the purged one. Nothing else is kept: no email, no identity.
 - **Guards** are database triggers, installed at startup only when the
   lifecycle is enabled. With the lifecycle disabled, they are removed, unless a
   deletion is recorded: an instance that never froze anything pays nothing,
-  and the freezes already recorded stay protected.
+  and the freezes already recorded stay protected. Disabled, the routes answer
+  `409 lifecycle_disabled` and nothing is purged.
 - **No instance-wide lock.** A freeze locks the row it freezes; a write locks
   the rows of its tenant, organization and member like a foreign key check
   does. A write waits only for a freeze of its own scope, then fails; a write
-  committed before the freeze stays.
+  committed before the freeze stays. A purge transaction locks its deletion and
+  the deletions of its tenant, whose guards it alone skips until it commits;
+  the purge of a tenant never waits for another tenant.
 
-A suspended organization now grants nothing: its memberships, the
-permissions of its applications and their tokens are refused, and the proxy
-serves none of its models, platform administrators included.
+A suspended organization grants nothing: its memberships, the permissions of
+its applications and their tokens are refused, and the proxy serves none of
+its models, platform administrators included.
+
+The web UI still deletes tenants, organizations and members at once, without
+export.
 
 ## Errors
 
@@ -768,6 +857,8 @@ Every error uses the same envelope:
 | `ownership_denied` | 403 | The ownership policy reserves the family to the local instance |
 | `resource_deleted` | 409 | The resource, or a resource holding it, is frozen by its deletion |
 | `lifecycle_disabled` | 409 | Deleting a tenant, an organization or a member while `XOLO_LIFECYCLE_ENABLED` is off |
+| `export_mismatch` | 409 | The confirmed digest is not the one of the current export, or another digest is already confirmed |
+| `purge_not_ready` | 409 | The deletion is not confirmed, or its retention has not elapsed |
 | `not_found` | 404 | Unknown resource or route, or a resource belonging to another tenant or organization |
 | `parent_not_found` | 404 | The tenant, organization or member a resource hangs from does not exist in that scope |
 | `method_not_allowed` | 405 | Known resource, wrong method |
@@ -778,6 +869,7 @@ Every error uses the same envelope:
 | `webhook_capacity` | 409 | The tenant already holds the maximum number of webhook subscriptions |
 | `cursor_expired` | 410 | List cursor older than 24 hours, or event cursor older than the retained events: rebuild |
 | `precondition_failed` | 412 | `If-Match` does not designate the current revision |
+| `precondition_required` | 428 | A purge confirmation without an explicit `If-Match` |
 | `unprocessable` | 422 | Well-formed value refused by the domain |
 | `rate_limited` | 429 | Per-URI budget exceeded; retry after the `Retry-After` seconds |
 | `internal_error` | 500 | Unexpected failure |
@@ -810,6 +902,7 @@ server-side.
   and so is an organization or a user belonging to another tenant.
 - The `default` tenant keeps its slug and stays active.
 - Builtin roles cannot be modified nor deleted.
+- The identifier of a purged tenant, organization or member is never reused.
 - Only permission codes present in the RBAC catalog are accepted.
 
 ## Upgrading from the previous routes
@@ -824,15 +917,15 @@ unchanged: an existing resource is addressed by its current UUID.
 | `POST /v1/tenants` `{slug, name, description, active}` | `PUT /v1/tenants/{tenantID}` `{slug, name, status}` with a UUID of your choice; `description` through `PATCH /v1/xolo/tenants/{tenantID}` |
 | `GET /v1/tenants/{tenantID}` | `GET /v1/xolo/tenants/{tenantID}` |
 | `PATCH /v1/tenants/{tenantID}` `{name, description, active}` | `PATCH /v1/xolo/tenants/{tenantID}` (same body), or `PUT /v1/tenants/{tenantID}` `{slug, name, status}` |
-| `DELETE /v1/tenants/{tenantID}` | Removed: `PUT /v1/tenants/{tenantID}` with `"status": "suspended"` |
+| `DELETE /v1/tenants/{tenantID}` | Same route, now deferred: `202`, then export, confirmation and purge, see [Resource lifecycle](#resource-lifecycle); `PUT /v1/tenants/{tenantID}` with `"status": "suspended"` to only suspend |
 | `GET /v1/tenants/{tenantID}/organizations[/{orgID}]` | `GET /v1/xolo/tenants/{tenantID}/organizations[/{orgID}]` |
 | `POST /v1/tenants/{tenantID}/organizations` `{slug, name, description, currency, active, owner}` | `PUT /v1/tenants/{tenantID}/organizations/{orgID}` `{slug, name, status}`; `description` and `currency` through `PATCH /v1/xolo/…/organizations/{orgID}`; the owner through `PUT …/organizations/{orgID}/members/{userID}` `{"role": "owner", "status": "active"}`, once declared with `PUT …/members/{userID}` |
 | `PATCH /v1/tenants/{tenantID}/organizations/{orgID}` | `PATCH /v1/xolo/tenants/{tenantID}/organizations/{orgID}` (same body) |
-| `DELETE /v1/tenants/{tenantID}/organizations/{orgID}` | Removed: `PUT …/organizations/{orgID}` with `"status": "suspended"` |
+| `DELETE /v1/tenants/{tenantID}/organizations/{orgID}` | Same route, now deferred like a tenant; `PUT …/organizations/{orgID}` with `"status": "suspended"` to only suspend |
 | `GET …/organizations/{orgID}/members[/{membershipID}]` | `GET /v1/xolo/…/organizations/{orgID}/members[/{membershipID}]` |
 | `POST …/organizations/{orgID}/members` `{userId \| user, roleIds, builtinRoles}` | `PUT /v1/tenants/{tenantID}/organizations/{orgID}/members/{userID}` `{role, status}`; custom roles through `PUT /v1/xolo/…/members/{membershipID}/roles` |
 | `PUT …/members/{membershipID}/roles` | `PUT /v1/xolo/…/members/{membershipID}/roles` (same body) |
-| `DELETE …/members/{membershipID}` | Removed: `PUT …/organizations/{orgID}/members/{userID}` with `"status": "suspended"` |
+| `DELETE …/members/{membershipID}` | `DELETE /v1/tenants/{tenantID}/organizations/{orgID}/members/{userID}`, keyed by the member UUID: `204`; `PUT …` with `"status": "suspended"` to only suspend |
 | `…/organizations/{orgID}/roles[/{roleID}]` (all methods) | `/v1/xolo/…/organizations/{orgID}/roles[/{key}]`, with the changes below |
 | `GET /v1/xolo/…/roles` (builtin and custom, camelCase `roleDTO`) | `GET /v1/xolo/…/roles` lists the custom roles as a page of projections; builtin roles through `GET /v1/xolo/…/roles/builtin` |
 | `GET /v1/xolo/…/roles/{roleID}` (camelCase `roleDTO`) | Same route: the snake_case representation and its `ETag` |
@@ -950,5 +1043,4 @@ In production, use a managed certificate authority (Vault, cert-manager, interna
 
 - LLM models, virtual models, middlewares, application tokens and event settings: they remain managed through the web UI.
 - Per-certificate scopes: any authorized URI administers the whole instance.
-- Deleting tenants, domains, organizations, memberships or business resources other than custom roles: suspend or disable them instead.
 - No OpenAPI specification is generated yet.

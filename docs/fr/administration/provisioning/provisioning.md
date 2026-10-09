@@ -79,11 +79,15 @@ N'exposez pas ce port sur un réseau public : réservez-le au réseau d'administ
 | `PUT` | `/v1/tenants/{tenantID}/organizations/{orgID}` | `{"slug","name","status"}` |
 | `PUT` | `/v1/tenants/{tenantID}/members/{memberID}` | `{"email","tenant_role","status"}`, `"display_name"` et `"identity"` facultatifs |
 | `PUT` | `/v1/tenants/{tenantID}/organizations/{orgID}/members/{memberID}` | `{"role","status"}` |
+| `DELETE` | `/v1/tenants/{tenantID}/domains/{hostname}` | — supprimé immédiatement, `204` |
+| `DELETE` | `/v1/tenants/{tenantID}/organizations/{orgID}/members/{memberID}` | — supprimée immédiatement, `204` |
+| `DELETE` | `/v1/tenants/{tenantID}`, `…/organizations/{orgID}`, `…/members/{memberID}` | — suppression enregistrée, purge différée : voir [Cycle de vie des ressources](#cycle-de-vie-des-ressources) |
 
 Chacune de ces ressources peut aussi être lue, listée et suivie via le flux
 d'événements : voir [Lectures, conditions et synchronisation](#lectures-conditions-et-synchronisation).
 `capabilities` liste `adoption`, `business_resources`, `conditional_writes`,
-`events`, `identity`, `ownership` et `reads`, plus `webhooks` lorsqu'ils sont activés.
+`events`, `identity`, `ownership` et `reads`, plus `webhooks` et `lifecycle`
+lorsqu'ils sont activés.
 Traitez-la comme un ensemble : son ordre n'est pas significatif.
 
 - **Les identifiants** sont des UUID canoniques en minuscules choisis par le
@@ -543,13 +547,12 @@ et événements. Le manifeste annonce `business_resources`.
 
 | Méthode | Route |
 |---|---|
-| `GET`, `GET`, `PUT` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/roles[/{key}]` |
-| `GET`, `GET`, `PUT` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/applications[/{key}]` |
-| `GET`, `GET`, `PUT` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/alerts[/{key}]` |
-| `GET`, `GET`, `PUT` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/providers[/{key}]` |
-| `GET`, `GET`, `PUT` | `/v1/xolo/tenants/{tenantID}/quotas[/{key}]` |
+| `GET`, `GET`, `PUT`, `DELETE` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/roles[/{key}]` |
+| `GET`, `GET`, `PUT`, `DELETE` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/applications[/{key}]` |
+| `GET`, `GET`, `PUT`, `DELETE` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/alerts[/{key}]` |
+| `GET`, `GET`, `PUT`, `DELETE` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/providers[/{key}]` |
+| `GET`, `GET`, `PUT`, `DELETE` | `/v1/xolo/tenants/{tenantID}/quotas[/{key}]` |
 | `POST` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/roles` — crée un rôle personnalisé sous une clé choisie par le serveur ; répond `201` avec `{key, representation, etag}` |
-| `DELETE` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/roles/{key}` — supprime un rôle personnalisé (`204`) |
 | `GET` | `/v1/xolo/tenants/{tenantID}/organizations/{orgID}/roles/builtin` — les rôles intégrés, `{"items":[{"id","builtin_kind","name"}]}`, pour `PUT …/members/{membershipID}/roles` |
 
 Les représentations sont en snake_case et complètes : chaque champ est requis,
@@ -593,9 +596,15 @@ Les représentations sont en snake_case et complètes : chaque champ est requis,
   projection, un événement, ni en clair dans l'audit : une rotation ne change
   aucun `ETag` et ne publie aucun événement, mais l'audit enregistre le
   changement d'une empreinte du chiffré.
-- **Pas de suppression via le contrat**, hormis les rôles personnalisés : les
-  suppressions arriveront avec le cycle de vie des ressources. Les jetons
-  d'application restent gérés localement.
+- **Les suppressions sont immédiates** : `DELETE …/{key}` répond `204`, avec
+  un `If-Match` facultatif, et publie `<family>.deleted.v1`. Supprimer une
+  ressource absente, ou celle d'une autre organisation, ne change rien, sauf si
+  `If-Match` désigne une révision (`412`). Supprimer une application retire ses
+  rôles, ses jetons et son quota ; un provider, ses modèles ; un quota conserve
+  la consommation enregistrée sur son périmètre. Un rôle intégré est refusé
+  (`409 conflict`). Un périmètre gelé les refuse toutes
+  (`409 resource_deleted`). Elles ne dépendent pas de
+  `XOLO_LIFECYCLE_ENABLED`. Les jetons d'application restent gérés localement.
 - Les écritures de l'interface web publient aussi leurs événements. La
   migration `202610120001` projette les ressources métier existantes sans
   publier d'événement ; comme les précédentes, elle exige l'arrêt de tous les
@@ -750,23 +759,54 @@ version qui a migré la base.
 
 ## Cycle de vie des ressources
 
-Le socle de la suppression des tenants, organisations et membres est en
-place ; aucune route ne l'expose encore. Supprimer une telle ressource
-commence par enregistrer sa suppression, qui **gèle** la ressource et tout ce
-qu'elle contient jusqu'à sa purge.
+Les domaines, les adhésions et les ressources métier sont supprimés
+immédiatement. Un tenant, une organisation ou un membre porte des données
+qu'un client peut devoir conserver : sa suppression est différée. `DELETE`
+l'enregistre, ce qui **gèle** la ressource et tout ce qu'elle contient ; le
+client exporte le périmètre, confirme l'export par son condensat, et
+l'instance purge le périmètre une fois la rétention écoulée.
 
 | Variable | Défaut | Description |
 |---|---|---|
-| `XOLO_LIFECYCLE_ENABLED` | `false` | Autorise l'enregistrement des suppressions et installe les protections en base des périmètres gelés. |
+| `XOLO_LIFECYCLE_ENABLED` | `false` | Autorise l'enregistrement des suppressions, installe les protections en base des périmètres gelés et lance le worker de purge. |
 | `XOLO_LIFECYCLE_RETENTION` | `720h` | Durée pendant laquelle une ressource supprimée reste gelée avant de pouvoir être purgée, de 1 s à 3650 jours. |
+| `XOLO_LIFECYCLE_POLL_INTERVAL` | `1m` | Fréquence à laquelle le worker de purge cherche les suppressions échues, de 1 s à 1 h. |
+| `XOLO_LIFECYCLE_PURGE_BATCH` | `1000` | Lignes supprimées par une transaction de purge, de 1 à 100 000. |
+
+Avec `P` l'une des routes `/v1/tenants/{tenantID}`,
+`/v1/tenants/{tenantID}/organizations/{orgID}` et
+`/v1/tenants/{tenantID}/members/{memberID}` :
+
+| Méthode | Route | Réponse |
+|---|---|---|
+| `DELETE` | `P`, `If-Match` facultatif | `202` avec la suppression et l'`ETag` de la ressource gelée ; un `DELETE` répété renvoie la même suppression |
+| `GET` | `P/deletion` | `200` avec la suppression et son `ETag` |
+| `GET` | `P/deletion/export` | `200`, l'export du périmètre en flux NDJSON |
+| `POST` | `P/purge-confirmation`, `If-Match` obligatoire, `{"export_sha256": "…"}` | `200` avec la suppression confirmée |
+
+Une suppression se lit ainsi :
+
+```json
+{"resource_type":"organization","tenant_id":"…","resource_id":"…",
+ "deleted_at":"…","purge_after":"…","etag":"W/\"42\"",
+ "export_sha256":"…","confirmed_at":"…","purged_at":"…","attempts":0,"diagnostic":"purged"}
+```
+
+`etag` est présent jusqu'à la purge ; `export_sha256` et `confirmed_at` une
+fois l'export confirmé ; `purged_at`, et `purged_with` pour une ressource
+purgée avec son tenant, une fois la purge faite. `diagnostic` vaut
+`purge_failed` après une tentative échouée, que le worker renouvelle.
 
 - **Geler** une ressource la désactive, ce qui la publie `suspended` avec un
   événement `updated`, et enregistre sa suppression dans la même transaction.
   Le gel vérifie la condition `If-Match` et l'autorité d'écriture de chaque
   famille que contient le périmètre. Il refuse le dernier propriétaire actif
-  d'un tenant ou d'une organisation encore vivante (`409 last_owner`) et le
-  tenant `default`. Un tenant gelé perd aussitôt ses sessions OIDC ; un membre
-  gelé les conserve, mais son compte désactivé est refusé à chaque requête.
+  d'un tenant ou d'une organisation encore vivante (`409 last_owner`), le
+  tenant `default`, ainsi qu'un administrateur de plateforme ou un tenant qui
+  en contient un (`409 platform_admin_protected`). Un tenant gelé perd
+  aussitôt ses sessions OIDC ; un membre gelé les conserve, mais son compte
+  désactivé est refusé à chaque requête. L'`ETag` de la suppression est la
+  révision de la ressource gelée : elle ne change plus.
 - **Un périmètre gelé est en lecture seule.** Toute écriture d'une ligne
   qu'il contient est refusée, quel que soit son auteur : API
   (`409 resource_deleted`), interface web (`403`), workers et SQL brut. Cela
@@ -778,19 +818,75 @@ qu'elle contient jusqu'à sa purge.
   plus préparés ni livrés, et ses abonnements ne peuvent plus changer ; le
   détachement les conserve. L'évaluation des alertes et l'éviction des
   événements ignorent les périmètres gelés.
+- **L'export** (`xolo-deletion/1`) contient chaque ligne du périmètre, table
+  par table, et les audits de ses ressources, lus sur un seul instantané et
+  transmis une ligne à la fois. Les secrets en sont exclus : clés des
+  providers, valeurs des jetons, secrets des plugins et des webhooks, sessions
+  OIDC et livraisons en file.
+
+  ```
+  {"format":"xolo-deletion/1","source":…,"deletion":{…,"etag":…}}
+  {"table":"organizations","row":{…}}          (une par ligne)
+  {"count":…,"complete":true,"sha256":…}
+  ```
+
+  Le SHA-256 du trailer couvre toutes les lignes qui le précèdent, retours à
+  la ligne compris ; un export sans trailer a été interrompu. Rien n'y dépend
+  du moment où il est produit : deux exports de la même suppression donnent
+  les mêmes octets.
+- **La confirmation** porte le `sha256` du trailer, sous un `If-Match`
+  explicite sur la suppression (`*` ou son absence donnent
+  `428 precondition_required`). Le serveur exporte de nouveau le périmètre et
+  compare : un condensat différent donne `409 export_mismatch`. C'est le cas
+  lorsque la purge d'une autre suppression a retiré entre-temps des lignes de
+  ce périmètre, par exemple un membre d'une organisation supprimée purgé en
+  premier : exportez de nouveau et confirmez le nouveau condensat. Une
+  confirmation répétée avec le même condensat renvoie la suppression ; un
+  autre condensat, une fois l'export confirmé, donne `409 export_mismatch`.
+- **La purge** s'exécute sur chaque réplica, toutes les
+  `XOLO_LIFECYCLE_POLL_INTERVAL`, pour les suppressions confirmées dont
+  `purge_after` est passé. Modifier `XOLO_LIFECYCLE_RETENTION` ne raccourcit
+  jamais une suppression déjà enregistrée. Un tenant emporte les suppressions
+  de ses organisations et de ses membres. La purge retire, par transactions
+  courtes qu'elle reprend après un arrêt brutal :
+  1. les projections du périmètre, les événements qui les concernent et les
+     livraisons webhook en file pour ces événements, puis publie
+     `<family>.deleted.v1` : un tenant pour lui seul, une organisation pour
+     elle et les quotas qu'elle portait, un membre pour lui, ses adhésions,
+     son quota et ses alertes personnelles ;
+  2. chaque ligne du périmètre, enfants d'abord, par lots de
+     `XOLO_LIFECYCLE_PURGE_BATCH` ;
+  3. les audits de ses ressources. Les audits des opérations d'un membre
+     purgé sont conservés, avec un acteur anonymisé ; les alertes partagées
+     dont il était propriétaire perdent leur propriétaire (`alert.updated.v1`).
+- **Le plancher du flux ne bouge jamais.** Les événements retirés laissent un
+  trou dans la séquence, dont aucun consommateur n'a besoin : l'événement
+  `deleted` final donne l'issue. Aucun autre abonnement ne perd son
+  historique ni ses livraisons en file.
+- **Les identifiants sont retirés.** Une suppression purgée reste enregistrée,
+  ainsi que celles des organisations et des membres d'un tenant purgé : leurs
+  UUID sont refusés pour toujours (`409 resource_deleted`), pour qu'aucun
+  client ne confonde une nouvelle ressource avec la ressource purgée. Rien
+  d'autre n'est conservé : ni email, ni identité.
 - **Les protections** sont des triggers, installés au démarrage seulement si
   le cycle de vie est activé. Désactivé, ils sont retirés, sauf si une
   suppression est enregistrée : une instance qui n'a jamais rien gelé ne paie
-  rien, et les gels existants restent protégés.
+  rien, et les gels existants restent protégés. Désactivé, les routes
+  répondent `409 lifecycle_disabled` et rien n'est purgé.
 - **Aucun verrou global.** Un gel verrouille la ligne qu'il gèle ; une
   écriture verrouille les lignes de son tenant, de son organisation et de son
   membre, comme le fait une clé étrangère. Une écriture n'attend qu'un gel de
   son propre périmètre, puis échoue ; une écriture validée avant le gel est
-  conservée.
+  conservée. Une transaction de purge verrouille sa suppression et celles de
+  son tenant, dont elle seule ignore les protections jusqu'à sa validation ;
+  la purge d'un tenant n'attend jamais un autre tenant.
 
-Une organisation suspendue n'accorde désormais plus rien : ses adhésions, les
+Une organisation suspendue n'accorde plus rien : ses adhésions, les
 permissions de ses applications et leurs jetons sont refusés, et le proxy ne
 sert aucun de ses modèles, administrateurs de plateforme compris.
+
+L'interface web supprime toujours les tenants, organisations et membres
+immédiatement, sans export.
 
 ## Erreurs
 
@@ -813,6 +909,8 @@ Toutes les erreurs partagent la même enveloppe :
 | `ownership_denied` | 403 | La politique d'autorité réserve la famille à l'instance locale. |
 | `resource_deleted` | 409 | La ressource, ou une ressource qui la contient, est gelée par sa suppression. |
 | `lifecycle_disabled` | 409 | Suppression d'un tenant, d'une organisation ou d'un membre alors que `XOLO_LIFECYCLE_ENABLED` est désactivé. |
+| `export_mismatch` | 409 | Le condensat confirmé n'est pas celui de l'export actuel, ou un autre condensat est déjà confirmé. |
+| `purge_not_ready` | 409 | La suppression n'est pas confirmée, ou sa rétention n'est pas écoulée. |
 | `not_found` | 404 | Ressource ou route inconnue, ou ressource d'un autre tenant ou d'une autre organisation. |
 | `parent_not_found` | 404 | Le tenant, l'organisation ou le membre dont dépend la ressource n'existe pas dans ce périmètre. |
 | `method_not_allowed` | 405 | Ressource connue, mauvaise méthode. |
@@ -823,6 +921,7 @@ Toutes les erreurs partagent la même enveloppe :
 | `webhook_capacity` | 409 | Le tenant compte déjà le nombre maximal d'abonnements webhook. |
 | `cursor_expired` | 410 | Curseur de liste de plus de 24 heures, ou curseur d'événements antérieur aux événements conservés : reconstruisez. |
 | `precondition_failed` | 412 | `If-Match` ne désigne pas la révision actuelle. |
+| `precondition_required` | 428 | Confirmation de purge sans `If-Match` explicite. |
 | `unprocessable` | 422 | Valeur bien formée mais refusée par le domaine. |
 | `rate_limited` | 429 | Budget par URI dépassé ; attendre les secondes indiquées par `Retry-After`. |
 | `internal_error` | 500 | Erreur inattendue. |
@@ -856,6 +955,8 @@ Les messages sont toujours construits explicitement. Traces d'exécution, erreur
   organisation ou un utilisateur d'un autre tenant.
 - Le tenant `default` garde son slug et reste actif.
 - Les rôles intégrés ne peuvent être ni modifiés ni supprimés.
+- L'identifiant d'un tenant, d'une organisation ou d'un membre purgé n'est
+  jamais réutilisé.
 - Seuls les codes de permission du catalogue RBAC sont acceptés.
 
 ## Migration depuis les routes précédentes
@@ -871,15 +972,15 @@ actuel.
 | `POST /v1/tenants` `{slug, name, description, active}` | `PUT /v1/tenants/{tenantID}` `{slug, name, status}` avec un UUID de votre choix ; `description` via `PATCH /v1/xolo/tenants/{tenantID}` |
 | `GET /v1/tenants/{tenantID}` | `GET /v1/xolo/tenants/{tenantID}` |
 | `PATCH /v1/tenants/{tenantID}` `{name, description, active}` | `PATCH /v1/xolo/tenants/{tenantID}` (même corps), ou `PUT /v1/tenants/{tenantID}` `{slug, name, status}` |
-| `DELETE /v1/tenants/{tenantID}` | Supprimée : `PUT /v1/tenants/{tenantID}` avec `"status": "suspended"` |
+| `DELETE /v1/tenants/{tenantID}` | Même route, désormais différée : `202`, puis export, confirmation et purge, voir [Cycle de vie des ressources](#cycle-de-vie-des-ressources) ; `PUT /v1/tenants/{tenantID}` avec `"status": "suspended"` pour seulement suspendre |
 | `GET /v1/tenants/{tenantID}/organizations[/{orgID}]` | `GET /v1/xolo/tenants/{tenantID}/organizations[/{orgID}]` |
 | `POST /v1/tenants/{tenantID}/organizations` `{slug, name, description, currency, active, owner}` | `PUT /v1/tenants/{tenantID}/organizations/{orgID}` `{slug, name, status}` ; `description` et `currency` via `PATCH /v1/xolo/…/organizations/{orgID}` ; le propriétaire via `PUT …/organizations/{orgID}/members/{userID}` `{"role": "owner", "status": "active"}`, une fois déclaré par `PUT …/members/{userID}` |
 | `PATCH /v1/tenants/{tenantID}/organizations/{orgID}` | `PATCH /v1/xolo/tenants/{tenantID}/organizations/{orgID}` (même corps) |
-| `DELETE /v1/tenants/{tenantID}/organizations/{orgID}` | Supprimée : `PUT …/organizations/{orgID}` avec `"status": "suspended"` |
+| `DELETE /v1/tenants/{tenantID}/organizations/{orgID}` | Même route, désormais différée comme un tenant ; `PUT …/organizations/{orgID}` avec `"status": "suspended"` pour seulement suspendre |
 | `GET …/organizations/{orgID}/members[/{membershipID}]` | `GET /v1/xolo/…/organizations/{orgID}/members[/{membershipID}]` |
 | `POST …/organizations/{orgID}/members` `{userId \| user, roleIds, builtinRoles}` | `PUT /v1/tenants/{tenantID}/organizations/{orgID}/members/{userID}` `{role, status}` ; rôles personnalisés via `PUT /v1/xolo/…/members/{membershipID}/roles` |
 | `PUT …/members/{membershipID}/roles` | `PUT /v1/xolo/…/members/{membershipID}/roles` (même corps) |
-| `DELETE …/members/{membershipID}` | Supprimée : `PUT …/organizations/{orgID}/members/{userID}` avec `"status": "suspended"` |
+| `DELETE …/members/{membershipID}` | `DELETE /v1/tenants/{tenantID}/organizations/{orgID}/members/{userID}`, par l'UUID du membre : `204` ; `PUT …` avec `"status": "suspended"` pour seulement suspendre |
 | `…/organizations/{orgID}/roles[/{roleID}]` (toutes méthodes) | `/v1/xolo/…/organizations/{orgID}/roles[/{key}]`, avec les changements ci-dessous |
 | `GET /v1/xolo/…/roles` (intégrés et personnalisés, `roleDTO` en camelCase) | `GET /v1/xolo/…/roles` liste les rôles personnalisés en page de projections ; les rôles intégrés via `GET /v1/xolo/…/roles/builtin` |
 | `GET /v1/xolo/…/roles/{roleID}` (`roleDTO` en camelCase) | Même route : la représentation snake_case et son `ETag` |
@@ -1008,5 +1109,4 @@ En production, utilisez une autorité de certification gérée (Vault, cert-mana
 
 - Les modèles LLM, modèles virtuels, middlewares, jetons d'application et paramètres d'événements : ils restent gérés par l'interface web.
 - Les portées par certificat : tout URI autorisé administre l'instance entière.
-- La suppression de tenants, domaines, organisations, adhésions ou ressources métier autres que les rôles personnalisés : suspendez-les ou désactivez-les.
 - Aucune spécification OpenAPI n'est générée à ce jour.

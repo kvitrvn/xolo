@@ -613,5 +613,12 @@ func schemaMigrations(artifact *RecoveryArtifact) []*gormigrate.Migration {
 				return errors.New("lifecycle migration cannot be rolled back: recorded deletions would stop being protected")
 			},
 		},
+		{
+			ID:      lifecyclePurgeMigrationID,
+			Migrate: migrateLifecyclePurge,
+			Rollback: func(*gorm.DB) error {
+				return errors.New("lifecycle purge migration cannot be rolled back: purged deletions would lose their tombstones")
+			},
+		},
 	}
 }

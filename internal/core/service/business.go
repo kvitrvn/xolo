@@ -279,6 +279,50 @@ func (s *ProvisioningService) PutProvider(ctx context.Context, tenantID model.Te
 	})
 }
 
+// DeleteBusiness removes a business resource at once, under condition. A
+// resource of another organization or tenant is treated as missing, and
+// deleting a missing resource changes nothing. A builtin role is never
+// deleted. The spend recorded on the scope of a quota is kept.
+func (s *ProvisioningService) DeleteBusiness(ctx context.Context, scope model.CommonScope, key string, condition model.MatchCondition) error {
+	if !model.IsBusinessFamily(scope.Family) {
+		return errors.WithStack(port.ErrInvalid)
+	}
+	if _, _, err := model.ParseBusinessKey(key); err != nil {
+		return errors.WithStack(port.ErrInvalid)
+	}
+	ctx = model.EnsureActor(ctx)
+	return s.transaction(ctx, func(tx *ProvisioningService) error {
+		exists, err := tx.deleteTarget(ctx, scope, key, condition)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			if scope.Family != model.FamilyCustomRole {
+				return nil
+			}
+			// Builtin roles have no projection: refused, never ignored.
+			role, err := tx.roleStore.GetRoleByID(ctx, model.RoleID(key))
+			if err == nil && string(role.OrgID()) == scope.OrganizationID && role.Builtin() {
+				return errors.Wrapf(port.ErrNotAllowed, "builtin role %q can not be deleted", role.Name())
+			}
+			return nil
+		}
+		switch scope.Family {
+		case model.FamilyCustomRole:
+			err = tx.roleStore.DeleteRole(ctx, model.RoleID(key))
+		case model.FamilyApplication:
+			err = tx.tx.DeleteApplication(ctx, model.ApplicationID(key))
+		case model.FamilyQuota:
+			err = tx.tx.DeleteQuota(ctx, model.QuotaID(key))
+		case model.FamilyAlert:
+			err = tx.tx.DeleteAlert(ctx, model.AlertID(key))
+		case model.FamilyProvider:
+			err = tx.tx.DeleteProvider(ctx, model.ProviderID(key))
+		}
+		return errors.WithStack(err)
+	})
+}
+
 // businessResource is the state of the resource a business PUT targets.
 type businessResource struct {
 	exists, unchanged bool
