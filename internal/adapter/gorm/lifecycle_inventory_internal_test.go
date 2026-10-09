@@ -1,8 +1,14 @@
 package gorm
 
 import (
+	"context"
+	"path/filepath"
 	"slices"
 	"testing"
+
+	"github.com/ncruces/go-sqlite3/gormlite"
+	"github.com/stretchr/testify/require"
+	gormpkg "gorm.io/gorm"
 )
 
 // TestPurgeOrderCoversInventory: the purge empties every table of the
@@ -41,5 +47,26 @@ func TestPurgeOrderRespectsDependencies(t *testing.T) {
 				t.Errorf("%s must be purged before %s", table, parent)
 			}
 		}
+	}
+}
+
+// TestInventoryKeysArePrimaryKeys: the export orders the rows of each table
+// by its key, and the purge removes them through it. A key that is not the
+// whole primary key would skip or repeat rows.
+func TestInventoryKeysArePrimaryKeys(t *testing.T) {
+	db, err := gormpkg.Open(gormlite.Open("file:"+filepath.Join(t.TempDir(), "inventory.sqlite")), &gormpkg.Config{})
+	require.NoError(t, err)
+	require.NoError(t, NewStore(db).Migrate(context.Background()))
+	for _, entry := range lifecycleTables {
+		var columns []struct {
+			Name string
+			PK   int
+		}
+		require.NoError(t, db.Raw("SELECT name, pk FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk", entry.table).Scan(&columns).Error)
+		primary := make([]string, 0, len(columns))
+		for _, column := range columns {
+			primary = append(primary, column.Name)
+		}
+		require.ElementsMatch(t, primary, entry.keyColumns(), entry.table)
 	}
 }

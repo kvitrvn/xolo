@@ -474,7 +474,7 @@ func TestFreezeRefusesPlatformAdmins(t *testing.T) {
 }
 
 // TestPurgeLocksOnlyItsScope: on PostgreSQL, a write in progress in another
-// tenant never holds the purge of a tenant, nor the reverse.
+// tenant never holds the purge of a tenant.
 func TestPurgeLocksOnlyItsScope(t *testing.T) {
 	eachBackendDB(t, func(t *testing.T, db *gormpkg.DB) {
 		if db.Dialector.Name() != "postgres" {
@@ -506,5 +506,64 @@ func TestPurgeLocksOnlyItsScope(t *testing.T) {
 		require.NoError(t, writing.Commit().Error)
 		require.False(t, exists(t, db, "tenants", string(purged)))
 		require.Equal(t, int64(1), countRows(t, db, "usage_records", "org_id = ?", string(fixture.org)))
+	})
+}
+
+// TestPurgeHoldsOnlyItsScope: on PostgreSQL, a purge in progress, its
+// transaction open after removing rows of its tenant, never holds a write of
+// another tenant. Its own tenant stays refused.
+func TestPurgeHoldsOnlyItsScope(t *testing.T) {
+	eachBackendDB(t, func(t *testing.T, db *gormpkg.DB) {
+		if db.Dialector.Name() != "postgres" {
+			t.Skip("SQLite serializes every writer")
+		}
+		ctx := t.Context()
+		base := newSeededStore(t, db)
+		fixture := newOwnershipFixture(t, base)
+		store := lifecycleStore(t, db)
+		purged := newWebhookTenant(t, base, "purged")
+		org := model.NewOrganization(purged, "inside", "Inside", "")
+		require.NoError(t, base.CreateOrg(ctx, org))
+		require.NoError(t, base.RecordUsage(ctx, model.NewUsageRecord("", "", org.ID(), "", "", "fast", "", 1, 1, 2, 10, "EUR", model.CostSourceComputed, "")))
+		d := confirmDeletion(t, db, store, tenantScope, string(purged))
+
+		// The purge stops inside its transaction, right after removing the
+		// usage of its tenant, until released.
+		paused, release := make(chan struct{}), make(chan struct{})
+		var once bool
+		require.NoError(t, db.Callback().Raw().After("gorm:raw").Register("test:pause", func(tx *gormpkg.DB) {
+			if !once && strings.HasPrefix(tx.Statement.SQL.String(), "DELETE FROM usage_records") {
+				once = true
+				close(paused)
+				<-release
+			}
+		}))
+		t.Cleanup(func() { _ = db.Callback().Raw().Remove("test:pause") })
+		done := make(chan error, 1)
+		go func() { done <- store.PurgeDeletion(context.Background(), d) }()
+		select {
+		case <-paused:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the purge never reached its rows")
+		}
+
+		other := make(chan error, 1)
+		go func() {
+			other <- base.RecordUsage(context.Background(), model.NewUsageRecord(fixture.user, "", fixture.org, "", "", "fast", "", 1, 1, 2, 10, "EUR", model.CostSourceComputed, ""))
+		}()
+		select {
+		case err := <-other:
+			require.NoError(t, err)
+		case <-time.After(5 * time.Second):
+			close(release)
+			t.Fatal("a purge in progress blocked another tenant")
+		}
+		// The purge skips the guards only in its own transaction.
+		require.ErrorIs(t, base.RecordUsage(context.Background(), model.NewUsageRecord("", "", org.ID(), "", "", "fast", "", 1, 1, 2, 10, "EUR", model.CostSourceComputed, "")),
+			port.ErrResourceDeleted)
+		close(release)
+		require.NoError(t, <-done)
+		require.Equal(t, int64(1), countRows(t, db, "usage_records", "org_id = ?", string(fixture.org)))
+		require.False(t, exists(t, db, "tenants", string(purged)))
 	})
 }
