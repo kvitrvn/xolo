@@ -44,6 +44,11 @@ const (
 	codeOwnershipDenied   = "ownership_denied"
 	codeResourceDeleted   = "resource_deleted"
 	codeLifecycleDisabled = "lifecycle_disabled"
+
+	// Deletion export and purge confirmation.
+	codePreconditionRequired = "precondition_required"
+	codeExportMismatch       = "export_mismatch"
+	codePurgeNotReady        = "purge_not_ready"
 )
 
 type errorEnvelope struct {
@@ -107,6 +112,12 @@ func statusFromError(err error) (int, string) {
 		return http.StatusConflict, codeResourceDeleted
 	case errors.Is(err, port.ErrLifecycleDisabled):
 		return http.StatusConflict, codeLifecycleDisabled
+	case errors.Is(err, port.ErrConfirmationRequired):
+		return http.StatusPreconditionRequired, codePreconditionRequired
+	case errors.Is(err, port.ErrExportMismatch):
+		return http.StatusConflict, codeExportMismatch
+	case errors.Is(err, port.ErrPurgeNotReady):
+		return http.StatusConflict, codePurgeNotReady
 	case errors.Is(err, port.ErrInvalidCursor):
 		return http.StatusBadRequest, codeInvalidCursor
 	case errors.Is(err, port.ErrCursorExpired):

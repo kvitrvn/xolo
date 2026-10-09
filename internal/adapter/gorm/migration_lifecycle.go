@@ -17,3 +17,11 @@ func migrateLifecycle(tx *gorm.DB) error {
 	}
 	return errors.WithStack(tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&LifecycleControl{ID: lifecycleControlID}).Error)
 }
+
+const lifecyclePurgeMigrationID = "202610140001"
+
+// migrateLifecyclePurge adds the confirmation, the purge state and the purge
+// flag of the deletions. Existing deletions stay frozen, unconfirmed.
+func migrateLifecyclePurge(tx *gorm.DB) error {
+	return errors.WithStack(tx.AutoMigrate(&ResourceDeletion{}))
+}

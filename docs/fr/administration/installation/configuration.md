@@ -160,8 +160,10 @@ Le schéma est créé et migré automatiquement au démarrage. Il n'existe pas d
 | `XOLO_PROVISIONNING_API_TLS_CLIENT_CA_FILE` | _(requis si activé)_ | Autorité vérifiant les certificats clients. |
 | `XOLO_PROVISIONNING_API_SHUTDOWN_TIMEOUT` | `10s` | Délai d'arrêt gracieux. |
 | `XOLO_OWNERSHIP` | — | Autorité d'écriture de chaque famille (`famille=shared\|local\|control_plane`, séparées par des virgules) ; les familles omises valent `shared`. Voir [Autorité d'écriture](../provisioning/provisioning.md#autorite-decriture-adoption-et-detachement). |
-| `XOLO_LIFECYCLE_ENABLED` | `false` | Autorise l'enregistrement des suppressions et installe les protections des périmètres gelés. Voir [Cycle de vie](../provisioning/provisioning.md#cycle-de-vie-des-ressources). |
-| `XOLO_LIFECYCLE_RETENTION` | `720h` | Durée de gel d'une ressource supprimée avant sa purge. |
+| `XOLO_LIFECYCLE_ENABLED` | `false` | Autorise l'enregistrement des suppressions, installe les protections des périmètres gelés et lance le worker de purge. Voir [Cycle de vie](../provisioning/provisioning.md#cycle-de-vie-des-ressources). |
+| `XOLO_LIFECYCLE_RETENTION` | `720h` | Durée de gel d'une ressource supprimée avant sa purge, de 1 s à 3650 jours. |
+| `XOLO_LIFECYCLE_POLL_INTERVAL` | `1m` | Fréquence de recherche des suppressions à purger, de 1 s à 1 h. |
+| `XOLO_LIFECYCLE_PURGE_BATCH` | `1000` | Lignes supprimées par transaction de purge, de 1 à 100 000. |
 
 ## Multi-tenant
 

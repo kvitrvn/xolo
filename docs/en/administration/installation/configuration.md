@@ -20,3 +20,14 @@ An OIDC provider can revoke sessions through [OpenID Connect Back-Channel Logout
 - in multi-tenant mode any active domain works. The route is not rate limited per IP: each request is authenticated by its signed token.
 
 Durable logout only covers these interactive sessions. An OIDC ID token presented to the API (`oidctoken`) stays valid until `exp` plus `XOLO_HTTP_AUTHN_OIDCTOKEN_EXPIRY_LEEWAY`; an opaque access token (`oauth2token`) until its validation cache entry expires (`XOLO_HTTP_AUTHN_OAUTH2TOKEN_CACHE_TTL`, 60s); a `/auth/token/login` session for the lifetime of its cookie. A local logout does not end the session at the identity provider. See the [French version](https://xolo-gateway.org/latest/) for details.
+
+## Resource lifecycle
+
+Deferred deletion of tenants, organizations and members through the provisioning API. See [Resource lifecycle](../provisioning/provisioning.md#resource-lifecycle).
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `XOLO_LIFECYCLE_ENABLED` | `false` | Allows recording deletions, installs the guards of the frozen scopes and runs the purge worker. |
+| `XOLO_LIFECYCLE_RETENTION` | `720h` | How long a deleted resource stays frozen before its purge, 1 s to 3650 days. |
+| `XOLO_LIFECYCLE_POLL_INTERVAL` | `1m` | How often the worker looks for deletions to purge, 1 s to 1 h. |
+| `XOLO_LIFECYCLE_PURGE_BATCH` | `1000` | Rows removed by one purge transaction, 1 to 100 000. |

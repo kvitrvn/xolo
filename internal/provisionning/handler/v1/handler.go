@@ -32,8 +32,11 @@ const (
 type Handler struct {
 	provisioning *service.ProvisioningService
 	webhooks     *service.WebhookService
-	mux          *http.ServeMux
-	version      string
+	lifecycle    *service.LifecycleService
+	// lifecycleEnabled announces the lifecycle capability.
+	lifecycleEnabled bool
+	mux              *http.ServeMux
+	version          string
 	// capabilities lists the optional parts of the contract this API serves,
 	// and nothing it does not.
 	capabilities []string
@@ -76,6 +79,7 @@ func NewHandler(provisioning *service.ProvisioningService, version string, optio
 		h.mux.HandleFunc("GET "+route.unit, h.handleCommonGet(route.family))
 		h.mux.HandleFunc("PUT "+route.unit, route.put)
 	}
+	h.mountDeletes()
 	h.mux.HandleFunc("GET /v1/events/cursor", h.handleEventCursor)
 	h.mux.HandleFunc("GET /v1/events", h.handleEvents)
 

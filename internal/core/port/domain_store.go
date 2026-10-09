@@ -12,4 +12,7 @@ type DomainStore interface {
 	GetDomain(ctx context.Context, hostname string) (model.Domain, error)
 	ListTenantDomains(ctx context.Context, tenantID model.TenantID) ([]model.Domain, error)
 	SaveDomain(ctx context.Context, domain model.Domain) error
+	// DeleteDomain removes a domain of the tenant. A missing domain, or one
+	// of another tenant, is ErrNotFound.
+	DeleteDomain(ctx context.Context, tenantID model.TenantID, hostname string) error
 }

@@ -39,6 +39,12 @@ func NewProvisionningAPIServerFromConfig(ctx context.Context, conf *config.Confi
 		options = append(options, v1.WithWebhooks(worker.WebhookService))
 	}
 
+	lifecycle, err := getLifecycleServiceFromConfig(ctx, conf)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	options = append(options, v1.WithLifecycle(lifecycle, conf.Lifecycle.Enabled))
+
 	tlsConfig, err := provisionning.LoadTLSConfig(
 		conf.ProvisionningAPI.TLSCertFile,
 		conf.ProvisionningAPI.TLSKeyFile,

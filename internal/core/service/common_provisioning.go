@@ -147,6 +147,71 @@ func (s *ProvisioningService) PutCommon(ctx context.Context, scope model.CommonS
 	return item, err
 }
 
+// deleteTarget checks, within the transaction, the parents of a resource to
+// delete and the condition against its current revision. A missing or
+// foreign parent is ErrParentNotFound. A missing resource is reported as
+// absent, unless a condition designates a revision: it then fails.
+func (s *ProvisioningService) deleteTarget(ctx context.Context, scope model.CommonScope, key string, condition model.MatchCondition) (bool, error) {
+	if _, err := s.commonParentTenant(ctx, model.TenantID(scope.TenantID)); err != nil {
+		return false, err
+	}
+	if scope.OrganizationID != "" {
+		org, err := s.orgStore.GetOrgByID(ctx, model.OrgID(scope.OrganizationID))
+		if errors.Is(err, port.ErrNotFound) || (err == nil && string(org.TenantID()) != scope.TenantID) {
+			return false, errors.Wrap(port.ErrParentNotFound, "organization not found")
+		}
+		if err != nil {
+			return false, errors.WithStack(err)
+		}
+	}
+	current, err := s.tx.ReadProjection(ctx, scope, key)
+	switch {
+	case errors.Is(err, port.ErrNotFound):
+		if condition.Present {
+			return false, errors.WithStack(port.ErrPreconditionFailed)
+		}
+		return false, nil
+	case err != nil:
+		return false, errors.WithStack(err)
+	case !condition.Matches(current.ETag):
+		return false, errors.WithStack(port.ErrPreconditionFailed)
+	}
+	return true, nil
+}
+
+// DeleteDomain removes a domain of the tenant at once: the hostname stops
+// resolving to it. Deleting a missing domain changes nothing.
+func (s *ProvisioningService) DeleteDomain(ctx context.Context, tenantID model.TenantID, hostname string, condition model.MatchCondition) error {
+	scope := model.CommonScope{Family: model.FamilyTenantDomain, TenantID: string(tenantID)}
+	ctx = model.EnsureActor(ctx)
+	return s.transaction(ctx, func(tx *ProvisioningService) error {
+		exists, err := tx.deleteTarget(ctx, scope, hostname, condition)
+		if err != nil || !exists {
+			return err
+		}
+		return errors.WithStack(tx.domainStore.DeleteDomain(ctx, tenantID, hostname))
+	})
+}
+
+// DeleteOrgMember removes the member from the organization at once. The last
+// active owner of the organization can not be removed. Deleting a missing
+// membership changes nothing.
+func (s *ProvisioningService) DeleteOrgMember(ctx context.Context, tenantID model.TenantID, orgID model.OrgID, userID model.UserID, condition model.MatchCondition) error {
+	scope := model.CommonScope{Family: model.FamilyOrganizationMembership, TenantID: string(tenantID), OrganizationID: string(orgID)}
+	ctx = model.EnsureActor(ctx)
+	return s.transaction(ctx, func(tx *ProvisioningService) error {
+		exists, err := tx.deleteTarget(ctx, scope, string(userID), condition)
+		if err != nil || !exists {
+			return err
+		}
+		membership, err := tx.orgStore.GetUserOrgMembership(ctx, userID, orgID)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		return errors.WithStack(tx.orgStore.RemoveMember(ctx, membership.ID()))
+	})
+}
+
 // PutTenant creates the tenant or brings it to the given representation. A
 // write identical to the stored state changes nothing. A second tenant is
 // refused on a single-tenant instance, and the default tenant keeps its slug

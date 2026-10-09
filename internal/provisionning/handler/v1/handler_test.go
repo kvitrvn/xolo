@@ -1564,9 +1564,10 @@ func TestRemovedRoutes(t *testing.T) {
 		{http.MethodDelete, env.xoloBase + orgPath, nil},
 		{http.MethodPost, env.tenantBase + orgPath + "/members", map[string]any{"user": identity, "builtinRoles": []string{"member"}}},
 		{http.MethodPost, env.xoloBase + orgPath + "/members", map[string]any{"user": identity, "builtinRoles": []string{"member"}}},
-		{http.MethodDelete, env.tenantBase + orgPath + "/members/" + membershipID, nil},
+		// A membership is deleted by member UUID at the root of /v1 again,
+		// never under /v1/xolo.
 		{http.MethodDelete, env.xoloBase + orgPath + "/members/" + membershipID, nil},
-		{http.MethodDelete, env.tenantBase + orgPath + "/members/" + userID, nil},
+		{http.MethodDelete, env.xoloBase + orgPath + "/members/" + userID, nil},
 		{http.MethodPatch, env.tenantBase + "/users/" + userID, map[string]any{"displayName": "Renamed"}},
 		{http.MethodPatch, env.xoloBase + "/users/" + userID, map[string]any{"displayName": "Renamed"}},
 

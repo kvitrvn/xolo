@@ -20,6 +20,7 @@ var getGormStoreFromConfig = createFromConfigOnce(func(ctx context.Context, conf
 		gormAdapter.WithIdentityIssuers(getIdentityIssuersFromConfig(ctx, conf)),
 		gormAdapter.WithOwnership(conf.Ownership),
 		gormAdapter.WithLifecycle(conf.Lifecycle.Enabled, conf.Lifecycle.Retention),
+		gormAdapter.WithPurgeBatch(conf.Lifecycle.PurgeBatch),
 	)
 	// Every replica must run the same policy: logged so that a divergence
 	// shows up when comparing their startups.

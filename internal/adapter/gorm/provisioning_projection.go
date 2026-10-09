@@ -348,19 +348,16 @@ func publishProjections(ctx context.Context, db *gorm.DB, ownership model.Owners
 	if err := authorizeProjections(ctx, ownership, changes); err != nil {
 		return err
 	}
-	var feed ProvisioningFeed
-	if err := db.First(&feed, provisioningFeedID).Error; err != nil {
-		return errors.WithStack(err)
+	publish, err := newEventAppender(ctx, db)
+	if err != nil {
+		return err
 	}
-	actor := model.ActorFromContext(ctx)
-	now := db.NowFunc().UTC()
 	for _, change := range changes {
 		sequence, err := nextProvisioningSequence(db)
 		if err != nil {
 			return err
 		}
-		data := model.CommonEventData{ResourceType: change.id.family, Key: change.id.reference()}
-		var kind string
+		var kind, etag string
 		switch {
 		case change.want == nil:
 			kind = model.CommonEventDeleted
@@ -377,23 +374,38 @@ func publishProjections(ctx context.Context, db *gorm.DB, ownership model.Owners
 			if err := db.Clauses(clause.OnConflict{UpdateAll: true}).Create(change.want).Error; err != nil {
 				return errors.WithStack(err)
 			}
-			data.ETag = model.CommonETag(sequence)
+			etag = model.CommonETag(sequence)
 		}
+		if err := publish(sequence, change.id, kind, etag); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// newEventAppender returns a function appending one event of the feed at an
+// allocated sequence. The caller holds the feed lock.
+func newEventAppender(ctx context.Context, db *gorm.DB) (func(sequence int64, id projectionID, kind, etag string) error, error) {
+	var feed ProvisioningFeed
+	if err := db.First(&feed, provisioningFeedID).Error; err != nil {
+		return nil, errors.WithStack(err)
+	}
+	actor := model.ActorFromContext(ctx)
+	now := db.NowFunc().UTC()
+	return func(sequence int64, id projectionID, kind, etag string) error {
+		data := model.CommonEventData{ResourceType: id.family, Key: id.reference(), ETag: etag}
 		payload, err := json.Marshal(model.CommonEvent{
 			SpecVersion: "1.0", ID: uuid.NewString(), Source: feed.Source,
-			Type: model.CommonEventType(change.id.family, kind), Time: now,
+			Type: model.CommonEventType(id.family, kind), Time: now,
 			DataContentType: "application/json", Sequence: strconv.FormatInt(sequence, 10),
 			RequestID: actor.RequestID, Data: data,
 		})
 		if err != nil {
 			return err
 		}
-		event := ProvisioningEvent{Sequence: sequence, CreatedAt: now, TenantID: change.id.tenantID, OrgID: change.id.orgID, Family: change.id.family, ResourceKey: change.id.key, Payload: string(payload)}
-		if err := db.Create(&event).Error; err != nil {
-			return errors.WithStack(err)
-		}
-	}
-	return nil
+		event := ProvisioningEvent{Sequence: sequence, CreatedAt: now, TenantID: id.tenantID, OrgID: id.orgID, Family: id.family, ResourceKey: id.key, Payload: string(payload)}
+		return errors.WithStack(db.Create(&event).Error)
+	}, nil
 }
 
 // lockProvisioningFeed orders the publication of this transaction after every

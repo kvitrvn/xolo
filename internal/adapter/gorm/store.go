@@ -29,6 +29,8 @@ type Store struct {
 	ownership model.OwnershipPolicy
 	// lifecycleRetention allows recording deletions; zero refuses them.
 	lifecycleRetention time.Duration
+	// purgeBatch bounds the rows one purge transaction removes.
+	purgeBatch int
 }
 
 func (s *Store) issuers() model.IdentityIssuers {
@@ -139,6 +141,7 @@ type storeOptions struct {
 	ownership       model.OwnershipPolicy
 	// lifecycleRetention is zero while the lifecycle is disabled.
 	lifecycleRetention time.Duration
+	purgeBatch         int
 }
 
 // WithAutoMigrate controls implicit schema changes; explicit Migrate still works.
@@ -172,6 +175,7 @@ func NewStore(db *gorm.DB, options ...StoreOption) *Store {
 		identityIssuers:    opts.identityIssuers,
 		ownership:          opts.ownership,
 		lifecycleRetention: opts.lifecycleRetention,
+		purgeBatch:         opts.purgeBatch,
 	}
 }
 

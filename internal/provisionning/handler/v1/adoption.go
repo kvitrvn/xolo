@@ -31,7 +31,7 @@ func (h *Handler) handleAdoptionExport(w http.ResponseWriter, r *http.Request) {
 	if !noQuery(w, r) {
 		return
 	}
-	stream := &lazyHeaderWriter{w: w}
+	stream := &lazyHeaderWriter{w: w, filename: "xolo-adoption.ndjson"}
 	if err := h.provisioning.ExportInventory(r.Context(), stream); err != nil {
 		if !stream.started {
 			writeServiceError(r.Context(), w, err, "could not export inventory")
@@ -44,8 +44,9 @@ func (h *Handler) handleAdoptionExport(w http.ResponseWriter, r *http.Request) {
 // lazyHeaderWriter sends the success headers with the first bytes, so an
 // error before them still gets an ordinary error response.
 type lazyHeaderWriter struct {
-	w       http.ResponseWriter
-	started bool
+	w        http.ResponseWriter
+	filename string
+	started  bool
 }
 
 func (l *lazyHeaderWriter) Write(p []byte) (int, error) {
@@ -54,7 +55,7 @@ func (l *lazyHeaderWriter) Write(p []byte) (int, error) {
 		header := l.w.Header()
 		header.Set("Content-Type", "application/x-ndjson")
 		header.Set("Cache-Control", "no-store")
-		header.Set("Content-Disposition", `attachment; filename="xolo-adoption.ndjson"`)
+		header.Set("Content-Disposition", `attachment; filename="`+l.filename+`"`)
 		l.w.WriteHeader(http.StatusOK)
 	}
 	return l.w.Write(p)

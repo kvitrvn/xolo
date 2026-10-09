@@ -82,6 +82,17 @@ func (tx *provisioningTx) UpdateApplication(ctx context.Context, app model.Appli
 	return tx.ProvisioningTx.UpdateApplication(ctx, app)
 }
 
+// DeleteApplication invalidates the cached tokens of the application.
+func (tx *provisioningTx) DeleteApplication(ctx context.Context, id model.ApplicationID) error {
+	tx.apps[id] = true
+	return tx.ProvisioningTx.DeleteApplication(ctx, id)
+}
+
+func (tx *provisioningTx) DeleteProvider(ctx context.Context, id model.ProviderID) error {
+	tx.providers[id] = true
+	return tx.ProvisioningTx.DeleteProvider(ctx, id)
+}
+
 func (tx *provisioningTx) CreateProvider(ctx context.Context, p model.Provider) error {
 	tx.providers[p.ID()] = true
 	return tx.ProvisioningTx.CreateProvider(ctx, p)

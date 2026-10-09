@@ -44,10 +44,9 @@ var businessCollections = map[string]string{
 	model.FamilyProvider:    "providers",
 }
 
-// mountBusiness serves the business resources with the reads, conditions and
-// events of the common contract. Quotas hang from the tenant, the others
-// from an organization. They are not deleted through the contract, except
-// custom roles, which keep their former DELETE route.
+// mountBusiness serves the business resources with the reads, conditions,
+// deletions and events of the common contract. Quotas hang from the tenant,
+// the others from an organization.
 func (h *Handler) mountBusiness() {
 	const (
 		tenant = "/v1/xolo/tenants/{tenantID}"
@@ -61,9 +60,9 @@ func (h *Handler) mountBusiness() {
 		h.mux.HandleFunc("GET "+collection, h.handleBusinessList(route))
 		h.mux.HandleFunc("GET "+collection+"/{resourceID}", h.handleBusinessGet(route))
 		h.mux.HandleFunc("PUT "+collection+"/{resourceID}", h.handleBusinessPut(route))
+		h.mux.HandleFunc("DELETE "+collection+"/{resourceID}", h.handleBusinessDelete(route))
 	}
 	h.mux.HandleFunc("POST "+org+"/roles", h.handleCreateRole)
-	h.mux.HandleFunc("DELETE "+org+"/roles/{resourceID}", h.handleDeleteRole)
 	h.mux.HandleFunc("GET "+org+"/roles/builtin", h.handleBuiltinRoles)
 	h.capabilities = append(h.capabilities, "business_resources")
 }
@@ -286,17 +285,24 @@ func (h *Handler) handleCreateRole(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, item)
 }
 
-func (h *Handler) handleDeleteRole(w http.ResponseWriter, r *http.Request) {
-	scope, key, ok := businessTarget(w, r, model.FamilyCustomRole)
-	if !ok || !noQuery(w, r) {
-		return
+// handleBusinessDelete removes a business resource at once. Deleting a
+// missing resource changes nothing, unless If-Match designates a revision.
+func (h *Handler) handleBusinessDelete(route businessRoute) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		scope, key, ok := businessTarget(w, r, route.family)
+		if !ok || !noQuery(w, r) || !noBody(w, r) {
+			return
+		}
+		condition, ok := commonCondition(w, r)
+		if !ok {
+			return
+		}
+		if err := h.provisioning.DeleteBusiness(r.Context(), scope, key, condition); err != nil {
+			writeServiceError(r.Context(), w, err, "could not delete resource")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
-	err := h.provisioning.DeleteRole(r.Context(), model.TenantID(scope.TenantID), model.OrgID(scope.OrganizationID), model.RoleID(key))
-	if err != nil {
-		writeServiceError(r.Context(), w, err, "role not found")
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 type builtinRoleDTO struct {
