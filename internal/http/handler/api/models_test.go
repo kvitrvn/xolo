@@ -330,10 +330,31 @@ func (s *fakeOrgStoreForModels) GetUserMemberships(ctx context.Context, userID m
 type fakeProviderStoreForModels struct {
 	port.ProviderStore
 	enabledModels map[string][]model.LLMModel
+	// currencies prices the providers of the enabled models; EUR by default.
+	currencies   map[model.ProviderID]string
+	providersErr error
 }
 
 func (s *fakeProviderStoreForModels) ListEnabledLLMModels(ctx context.Context, orgID model.OrgID) ([]model.LLMModel, error) {
 	return s.enabledModels[string(orgID)], nil
+}
+
+// ListProviders returns one provider per provider of the enabled models.
+func (s *fakeProviderStoreForModels) ListProviders(ctx context.Context, orgID model.OrgID) ([]model.Provider, error) {
+	if s.providersErr != nil {
+		return nil, s.providersErr
+	}
+	var providers []model.Provider
+	for _, m := range s.enabledModels[string(orgID)] {
+		currency, ok := s.currencies[m.ProviderID()]
+		if !ok {
+			currency = "EUR"
+		}
+		p := model.NewProvider(orgID, "p", "openai", "", "", currency)
+		p.SetID(m.ProviderID())
+		providers = append(providers, p)
+	}
+	return providers, nil
 }
 
 // fakeVirtualModelStoreForModels exposes only ListVirtualModels; the rest
