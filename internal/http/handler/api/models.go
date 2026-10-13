@@ -256,7 +256,7 @@ func (h *Handler) handleModels(w http.ResponseWriter, r *http.Request) {
 		}
 		var currencies map[model.ProviderID]string
 		if len(models) > 0 {
-			currencies = h.providerCurrencies(ctx, orgID)
+			currencies = cards.providerCurrencies(orgID)
 		}
 		for _, m := range models {
 			for _, name := range service.ListedModelNames(perms, bound, org.Slug(), m.ProxyName(), string(m.ID()), rbac.ModelKindLLM) {

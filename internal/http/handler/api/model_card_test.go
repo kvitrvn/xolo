@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/xolo-gateway/xolo/internal/core/model"
@@ -657,5 +658,38 @@ func TestModelCard_ProviderFailureLeavesTheCurrencyUnknown(t *testing.T) {
 	}
 	if len(resp.Data) != 1 || !resp.Data[0].Xolo.CapabilitiesDeclared || resp.Data[0].Xolo.Currency != "" {
 		t.Fatalf("catalogue = %+v", resp.Data)
+	}
+	// A price without its currency would be read in the client's own.
+	if p := resp.Data[0].Pricing; p.Prompt != 0 || p.Completion != 0 {
+		t.Errorf("pricing = %+v, want none without a currency", p)
+	}
+}
+
+func TestModelCard_ListsProvidersOncePerOrganization(t *testing.T) {
+	org := model.NewOrganization(testTenantID, "acme", "ACME", "")
+	gpt := realModel(org, "gpt", 64_000, model.ModelCapabilities{}, 1000, 2000)
+	vm := vmWithGraph(org, "auto", modelNodeGraph(t, "gpt"))
+	providers := &fakeProviderStoreForModels{enabledModels: map[string][]model.LLMModel{string(org.ID()): {gpt}}}
+	h := api.NewHandler(
+		providers,
+		&fakeOrgStoreForModels{orgsByID: map[string]model.Organization{string(org.ID()): org}},
+		&cardVMStore{vms: []model.VirtualModel{vm}}, &cardPVMStore{}, nil, nil, nil, nil,
+	)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/models", nil)
+	ctx := authn.SetContextUser(req.Context(), &authn.User{Provider: "oidc", Subject: "u", OrgID: string(org.ID()), TokenID: "tok", TenantID: string(testTenantID)})
+	ctx = httpCtx.SetUser(ctx, cardUser)
+	ctx = httpCtx.SetPermissionResolver(ctx, func(context.Context, model.OrgID) (rbac.PermissionSet, error) {
+		return rbac.NewPermissionSet([]string{string(rbac.PermModelUseOrg), string(rbac.PermModelUseVirtual)}, nil), nil
+	})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req.WithContext(ctx))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"acme/auto"`) {
+		t.Fatalf("virtual model not listed: %s", rec.Body.String())
+	}
+	if providers.listProvidersCalls != 1 {
+		t.Errorf("ListProviders called %d times, want 1", providers.listProvidersCalls)
 	}
 }

@@ -30,7 +30,8 @@ type modelTraits struct {
 }
 
 // traitsOfLLMModel describes a real model, priced in the currency of its
-// provider.
+// provider. An unknown currency leaves the price unknown: a figure without its
+// unit would be read in the client's own currency.
 func traitsOfLLMModel(m model.LLMModel, currency string) modelTraits {
 	t := modelTraits{
 		contextLength:  m.ContextWindow(),
@@ -39,6 +40,9 @@ func traitsOfLLMModel(m model.LLMModel, currency string) modelTraits {
 		completionCost: m.CompletionCostPer1KTokens(),
 		currency:       currency,
 		declared:       true,
+	}
+	if currency == "" {
+		t.promptCost, t.completionCost = 0, 0
 	}
 	if tlc := m.TokenLimitConfig(); tlc != nil && tlc.MaxTokens > 0 {
 		t.promptLimit = int64(tlc.MaxTokens)
@@ -138,6 +142,9 @@ type cardResolver struct {
 	orgs     map[model.OrgID]*scopedOrg
 	loaded   bool
 	resolver map[string]bool // plugin name -> picks the model at runtime
+	// currencies memoizes providerCurrencies per organization, shared with
+	// the listing of the real models.
+	currencies map[model.OrgID]map[model.ProviderID]string
 }
 
 type scopedOrg struct {
@@ -155,7 +162,19 @@ func (h *Handler) newCardResolver(ctx context.Context, orgIDs []model.OrgID, def
 		defaultOrg: defaultOrg,
 		userID:     userID,
 		orgs:       map[model.OrgID]*scopedOrg{},
+		currencies: map[model.OrgID]map[model.ProviderID]string{},
 	}
+}
+
+// providerCurrencies is Handler.providerCurrencies, read once per organization
+// and request, a failure included.
+func (r *cardResolver) providerCurrencies(orgID model.OrgID) map[model.ProviderID]string {
+	if currencies, ok := r.currencies[orgID]; ok {
+		return currencies
+	}
+	currencies := r.h.providerCurrencies(r.ctx, orgID)
+	r.currencies[orgID] = currencies
+	return currencies
 }
 
 // scope loads the organizations of the caller once, on the first name that
@@ -176,7 +195,7 @@ func (r *cardResolver) scope() map[model.OrgID]*scopedOrg {
 			slog.WarnContext(r.ctx, "could not list models to derive virtual model cards", slog.String("orgID", string(id)), slog.Any("error", err))
 			continue
 		}
-		so := &scopedOrg{slug: org.Slug(), models: make(map[string]model.LLMModel, len(models)), currencies: r.h.providerCurrencies(r.ctx, id)}
+		so := &scopedOrg{slug: org.Slug(), models: make(map[string]model.LLMModel, len(models)), currencies: r.providerCurrencies(id)}
 		for _, m := range models {
 			so.models[m.ProxyName()] = m
 		}

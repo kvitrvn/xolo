@@ -225,7 +225,11 @@ func TestHandleModels_ScopeResolution(t *testing.T) {
 
 			var resp struct {
 				Data []struct {
-					ID string `json:"id"`
+					ID   string `json:"id"`
+					Xolo struct {
+						CapabilitiesDeclared bool   `json:"capabilities_declared"`
+						Currency             string `json:"currency"`
+					} `json:"xolo"`
 				} `json:"data"`
 			}
 			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
@@ -235,6 +239,11 @@ func TestHandleModels_ScopeResolution(t *testing.T) {
 			got := make([]string, 0, len(resp.Data))
 			for _, m := range resp.Data {
 				got = append(got, m.ID)
+				// Real models declare their capabilities and the currency of
+				// their provider.
+				if !m.Xolo.CapabilitiesDeclared || m.Xolo.Currency == "" {
+					t.Errorf("model %s: xolo = %+v, want declared capabilities and a currency", m.ID, m.Xolo)
+				}
 			}
 			slices.Sort(got)
 			want := slices.Clone(tc.wantModelIDs)
@@ -333,6 +342,8 @@ type fakeProviderStoreForModels struct {
 	// currencies prices the providers of the enabled models; EUR by default.
 	currencies   map[model.ProviderID]string
 	providersErr error
+	// listProvidersCalls counts the calls to ListProviders.
+	listProvidersCalls int
 }
 
 func (s *fakeProviderStoreForModels) ListEnabledLLMModels(ctx context.Context, orgID model.OrgID) ([]model.LLMModel, error) {
@@ -341,6 +352,7 @@ func (s *fakeProviderStoreForModels) ListEnabledLLMModels(ctx context.Context, o
 
 // ListProviders returns one provider per provider of the enabled models.
 func (s *fakeProviderStoreForModels) ListProviders(ctx context.Context, orgID model.OrgID) ([]model.Provider, error) {
+	s.listProvidersCalls++
 	if s.providersErr != nil {
 		return nil, s.providersErr
 	}
