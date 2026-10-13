@@ -124,11 +124,16 @@ func (h *Handler) quotaOrg(r *http.Request, userID model.UserID) (model.OrgID, i
 		orgID = requested
 	}
 
-	// Only active memberships of active organizations are returned.
-	memberships, err := h.orgStore.GetUserMemberships(ctx, userID)
-	if err != nil {
-		slog.ErrorContext(ctx, "could not fetch user memberships", slogx.Error(err))
-		return "", http.StatusInternalServerError, "internal server error"
+	// Only active memberships of active organizations are returned. The
+	// memberships middleware already loaded them, unless its query failed.
+	memberships := httpCtx.Memberships(ctx)
+	if memberships == nil {
+		var err error
+		memberships, err = h.orgStore.GetUserMemberships(ctx, userID)
+		if err != nil {
+			slog.ErrorContext(ctx, "could not fetch user memberships", slogx.Error(err))
+			return "", http.StatusInternalServerError, "internal server error"
+		}
 	}
 	if orgID == "" {
 		if len(memberships) != 1 {

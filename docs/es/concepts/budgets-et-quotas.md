@@ -71,6 +71,8 @@ La respuesta solo cubre el nivel del usuario, es decir, el presupuesto que se co
 
 Los presupuestos de la organización, de los equipos y de los miembros de equipo tienen sus propios contadores y no se devuelven. Por lo tanto, pueden bloquear una solicitud antes que el presupuesto del usuario.
 
+Cuando el presupuesto de la organización es inferior al del usuario, las solicitudes se detienen en la cifra de la organización: `remaining` es entonces solo un límite superior, y el rechazo puede indicarse en el nivel del usuario (`User daily budget exceeded`, por ejemplo), ya que su contador se compara con el menor de los dos.
+
 ```json
 {
   "organization_id": "00000000-0000-0000-0000-000000000102",

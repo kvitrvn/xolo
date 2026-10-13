@@ -48,7 +48,10 @@ type quotaTestCase struct {
 	user        model.User
 	tokenOrgID  string
 	memberships []model.OrgID
-	query       string
+	// contextMemberships, when set, are stored in the request context as the
+	// memberships middleware does.
+	contextMemberships []model.OrgID
+	query              string
 }
 
 func serveQuota(t *testing.T, tc quotaTestCase, quotas *fakeUserQuotas, spend *fakeQuotaSpend, now time.Time) *httptest.ResponseRecorder {
@@ -71,7 +74,15 @@ func serveQuota(t *testing.T, tc quotaTestCase, quotas *fakeUserQuotas, spend *f
 			OrgID:    tc.tokenOrgID,
 			TenantID: string(testTenantID),
 		})
-		req = req.WithContext(httpCtx.SetUser(ctx, tc.user))
+		ctx = httpCtx.SetUser(ctx, tc.user)
+		if tc.contextMemberships != nil {
+			fromContext := []model.Membership{}
+			for _, orgID := range tc.contextMemberships {
+				fromContext = append(fromContext, model.NewMembership(tc.user.ID(), orgID))
+			}
+			ctx = httpCtx.SetMemberships(ctx, fromContext)
+		}
+		req = req.WithContext(ctx)
 	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -163,6 +174,8 @@ func TestHandleQuota_ResolvesOrganization(t *testing.T) {
 		{"token organization", quotaTestCase{user: user, tokenOrgID: "org-b", memberships: []model.OrgID{"org-a", "org-b"}}, http.StatusOK, "org-b"},
 		{"token bound to another organization", quotaTestCase{user: user, tokenOrgID: "org-b", memberships: []model.OrgID{"org-a", "org-b"}, query: "?organization=org-a"}, http.StatusNotFound, ""},
 		{"token organization no longer a membership", quotaTestCase{user: user, tokenOrgID: "org-b", memberships: []model.OrgID{"org-a"}}, http.StatusNotFound, ""},
+		// The store disagrees with the context: the context must win.
+		{"memberships from the context", quotaTestCase{user: user, memberships: []model.OrgID{"org-a"}, contextMemberships: []model.OrgID{"org-b"}}, http.StatusOK, "org-b"},
 		{"application", quotaTestCase{user: app, tokenOrgID: "org-a"}, http.StatusForbidden, ""},
 		{"unauthenticated", quotaTestCase{}, http.StatusUnauthorized, ""},
 	}

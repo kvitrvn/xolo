@@ -71,6 +71,8 @@ La réponse ne porte que sur le niveau de l'utilisateur, c'est-à-dire le budget
 
 Les budgets de l'organisation, des équipes et des membres d'équipe ont leurs propres compteurs et ne sont pas renvoyés. Ils peuvent donc bloquer une requête avant le budget de l'utilisateur.
 
+Quand le budget de l'organisation est inférieur à celui de l'utilisateur, les requêtes s'arrêtent au montant de l'organisation : `remaining` n'est alors qu'une borne supérieure, et le refus peut être signalé au niveau de l'utilisateur (`User daily budget exceeded`, par exemple), car son compteur est comparé au plus petit des deux.
+
 ```json
 {
   "organization_id": "00000000-0000-0000-0000-000000000102",

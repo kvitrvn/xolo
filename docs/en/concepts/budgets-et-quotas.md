@@ -71,6 +71,8 @@ The response covers the user level only, that is the budget checked against the 
 
 Organization, team and team-member budgets have their own counters and are not returned. They may therefore block a request before the user's budget does.
 
+When the organization budget is lower than the user's, requests stop at the organization's figure: `remaining` is then only an upper bound, and the refusal can be reported at the user level (`User daily budget exceeded`, for instance), since the user's counter is checked against the lower of the two.
+
 ```json
 {
   "organization_id": "00000000-0000-0000-0000-000000000102",
