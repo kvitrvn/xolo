@@ -11,9 +11,37 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+// trackingTeam designates a team and its settings, both published from the
+// teams table.
+func trackingTeam(id model.TeamID) func(*mutationRecorder) error {
+	return func(r *mutationRecorder) error {
+		if err := r.track("team", string(id)); err != nil {
+			return err
+		}
+		return r.track("team_settings", string(id))
+	}
+}
+
+// teamMemberKey is the mutation key of a team member: team_members has a
+// composite primary key.
+func teamMemberKey(teamID model.TeamID, membershipID model.MembershipID) string {
+	return string(teamID) + ":" + string(membershipID)
+}
+
+// trackingTeamMember designates a team member and the settings of its team,
+// which list the roles members hold on the team scope.
+func trackingTeamMember(id model.TeamID, membershipID model.MembershipID) func(*mutationRecorder) error {
+	return func(r *mutationRecorder) error {
+		if err := r.track("team_member", teamMemberKey(id, membershipID)); err != nil {
+			return err
+		}
+		return r.track("team_settings", string(id))
+	}
+}
+
 // CreateTeam implements port.TeamStore.
 func (s *Store) CreateTeam(ctx context.Context, team model.Team) error {
-	return s.recorded(ctx, tracking("team", string(team.ID())), func(ctx context.Context, db *gorm.DB) error {
+	return s.recorded(ctx, trackingTeam(team.ID()), func(ctx context.Context, db *gorm.DB) error {
 		if err := db.Omit("Org").Create(fromTeam(team)).Error; err != nil {
 			if isUniqueViolation(err, "org_id", "slug") {
 				return errors.Wrapf(port.ErrAlreadyExists, "team %q already exists in this organization", team.Slug())
@@ -26,7 +54,7 @@ func (s *Store) CreateTeam(ctx context.Context, team model.Team) error {
 
 // SaveTeam implements port.TeamStore.
 func (s *Store) SaveTeam(ctx context.Context, team model.Team) error {
-	return s.recorded(ctx, tracking("team", string(team.ID())), func(ctx context.Context, db *gorm.DB) error {
+	return s.recorded(ctx, trackingTeam(team.ID()), func(ctx context.Context, db *gorm.DB) error {
 		row := fromTeam(team)
 		if err := lockTeamMiddlewares(db, row.ID); err != nil {
 			return err
@@ -36,6 +64,7 @@ func (s *Store) SaveTeam(ctx context.Context, team model.Team) error {
 			"name":                row.Name,
 			"description":         row.Description,
 			"share_quota_equally": row.ShareQuotaEqually,
+			"status":              row.Status,
 			"updated_at":          row.UpdatedAt,
 		})
 		if result.Error != nil {
@@ -242,7 +271,7 @@ func (s *Store) queryTeamMembers(ctx context.Context, withUsers bool, scope func
 	var rows []*teamMemberRow
 	err := s.read(ctx, func(ctx context.Context, db *gorm.DB) error {
 		if err := scope(db.Table("team_members").
-			Select("team_members.team_id, team_members.membership_id, memberships.user_id, team_members.created_at").
+			Select("team_members.team_id, team_members.membership_id, memberships.user_id, team_members.status, team_members.created_at").
 			Joins("JOIN memberships ON memberships.id = team_members.membership_id")).
 			Order("team_members.team_id, team_members.created_at, team_members.membership_id").
 			Scan(&rows).Error; err != nil {
@@ -303,9 +332,10 @@ func (s *Store) queryTeamMembers(ctx context.Context, withUsers bool, scope func
 	return result, nil
 }
 
-// SetTeamMember implements port.TeamStore.
+// SetTeamMember implements port.TeamStore. A new team member is active; an
+// existing one keeps its status.
 func (s *Store) SetTeamMember(ctx context.Context, id model.TeamID, membershipID model.MembershipID, roleIDs []model.RoleID) error {
-	return s.recorded(ctx, tracking("team", string(id)), func(ctx context.Context, db *gorm.DB) error {
+	return s.recorded(ctx, trackingTeamMember(id, membershipID), func(ctx context.Context, db *gorm.DB) error {
 		var team Team
 		if err := db.Select("id, org_id").First(&team, "id = ?", string(id)).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -340,7 +370,7 @@ func (s *Store) SetTeamMember(ctx context.Context, id model.TeamID, membershipID
 				return errors.Wrap(port.ErrInvalid, "a builtin role cannot be held on a team")
 			}
 		}
-		if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&TeamMember{TeamID: string(id), MembershipID: string(membershipID)}).Error; err != nil {
+		if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&TeamMember{TeamID: string(id), MembershipID: string(membershipID), Status: string(model.StatusActive)}).Error; err != nil {
 			return errors.WithStack(err)
 		}
 		if err := db.Where("team_id = ? AND membership_id = ?", string(id), string(membershipID)).Delete(&TeamMemberRole{}).Error; err != nil {
@@ -357,11 +387,28 @@ func (s *Store) SetTeamMember(ctx context.Context, id model.TeamID, membershipID
 	})
 }
 
+// SetTeamMemberStatus implements port.TeamStore.
+func (s *Store) SetTeamMemberStatus(ctx context.Context, id model.TeamID, membershipID model.MembershipID, status model.Status) error {
+	if !status.Valid() {
+		return errors.WithStack(port.ErrInvalid)
+	}
+	return s.recorded(ctx, trackingTeamMember(id, membershipID), func(ctx context.Context, db *gorm.DB) error {
+		result := db.Model(&TeamMember{}).Where("team_id = ? AND membership_id = ?", string(id), string(membershipID)).Update("status", string(status))
+		if result.Error != nil {
+			return errors.WithStack(result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return errors.WithStack(port.ErrNotFound)
+		}
+		return nil
+	})
+}
+
 // RemoveTeamMember implements port.TeamStore. The member's budget inside the
 // team goes with it.
 func (s *Store) RemoveTeamMember(ctx context.Context, id model.TeamID, membershipID model.MembershipID) error {
 	track := func(r *mutationRecorder) error {
-		if err := r.track("team", string(id)); err != nil {
+		if err := trackingTeamMember(id, membershipID)(r); err != nil {
 			return err
 		}
 		return r.trackTeamMemberQuotas(string(id), string(membershipID))
