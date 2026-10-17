@@ -46,6 +46,8 @@ func businessSnapshot(db *gorm.DB, key mutationKey, row map[string]any) error {
 			row[column] = decoded
 		}
 	case "team_settings":
+		// Its tenant is resolved through the organization of the team, as
+		// teamMemberSnapshot does for a team member.
 		grants := []map[string]any{}
 		var grantRows []TeamModelGrant
 		if err := db.Table("team_model_grants").Where("team_id = ?", key.id).Order("model_id, model_kind").Find(&grantRows).Error; err != nil {

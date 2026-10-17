@@ -122,14 +122,10 @@ func (s *ProvisioningService) PutTeamMembership(ctx context.Context, tenantID mo
 		return status, errors.WithStack(err)
 	}
 	i := slices.IndexFunc(members, func(m model.TeamMember) bool { return m.MembershipID() == membership.ID() })
-	if i < 0 {
-		if err := s.tx.SetTeamMember(ctx, teamID, membership.ID(), nil); err != nil {
-			return status, errors.WithStack(err)
-		}
-	} else if members[i].Status() == status {
-		return status, nil
-	}
-	if i < 0 && status == model.StatusActive {
+	switch {
+	case i < 0:
+		return status, errors.WithStack(s.tx.AddTeamMember(ctx, teamID, membership.ID(), status))
+	case members[i].Status() == status:
 		return status, nil
 	}
 	return status, errors.WithStack(s.tx.SetTeamMemberStatus(ctx, teamID, membership.ID(), status))

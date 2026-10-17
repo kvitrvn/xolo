@@ -226,7 +226,8 @@ func mutationSnapshot(db *gorm.DB, key mutationKey) ([]byte, error) {
 }
 
 // teamMemberSnapshot reads a team member, keyed by "<team_id>:<membership_id>",
-// with the user and the parents its projection hangs from.
+// with the user and the parents its projection hangs from. The team_settings
+// case of businessSnapshot walks the same team-to-tenant chain.
 func teamMemberSnapshot(db *gorm.DB, key mutationKey) ([]byte, error) {
 	teamID, membershipID, ok := strings.Cut(key.id, ":")
 	if !ok {

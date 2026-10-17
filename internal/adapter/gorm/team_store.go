@@ -336,20 +336,11 @@ func (s *Store) queryTeamMembers(ctx context.Context, withUsers bool, scope func
 // existing one keeps its status.
 func (s *Store) SetTeamMember(ctx context.Context, id model.TeamID, membershipID model.MembershipID, roleIDs []model.RoleID) error {
 	return s.recorded(ctx, trackingTeamMember(id, membershipID), func(ctx context.Context, db *gorm.DB) error {
-		var team Team
-		if err := db.Select("id, org_id").First(&team, "id = ?", string(id)).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return errors.WithStack(port.ErrNotFound)
-			}
-			return errors.WithStack(err)
+		team, err := teamOfMembership(db, id, membershipID)
+		if err != nil {
+			return err
 		}
 		var count int64
-		if err := db.Model(&Membership{}).Where("id = ? AND org_id = ?", string(membershipID), team.OrgID).Count(&count).Error; err != nil {
-			return errors.WithStack(err)
-		}
-		if count == 0 {
-			return errors.Wrap(port.ErrParentNotFound, "membership not found in the organization of the team")
-		}
 		if len(roleIDs) > 0 {
 			ids := make([]string, 0, len(roleIDs))
 			for _, roleID := range roleIDs {
@@ -382,6 +373,48 @@ func (s *Store) SetTeamMember(ctx context.Context, id model.TeamID, membershipID
 			}).Error; err != nil {
 				return errors.WithStack(err)
 			}
+		}
+		return nil
+	})
+}
+
+// teamOfMembership loads the team and checks that the membership belongs to
+// its organization.
+func teamOfMembership(db *gorm.DB, id model.TeamID, membershipID model.MembershipID) (Team, error) {
+	var team Team
+	if err := db.Select("id, org_id").First(&team, "id = ?", string(id)).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return team, errors.WithStack(port.ErrNotFound)
+		}
+		return team, errors.WithStack(err)
+	}
+	var count int64
+	if err := db.Model(&Membership{}).Where("id = ? AND org_id = ?", string(membershipID), team.OrgID).Count(&count).Error; err != nil {
+		return team, errors.WithStack(err)
+	}
+	if count == 0 {
+		return team, errors.Wrap(port.ErrParentNotFound, "membership not found in the organization of the team")
+	}
+	return team, nil
+}
+
+// AddTeamMember implements port.ProvisioningBusinessStore. The member is
+// written with its status in one insert, without team role; one already in
+// the team is ErrAlreadyExists.
+func (s *Store) AddTeamMember(ctx context.Context, id model.TeamID, membershipID model.MembershipID, status model.Status) error {
+	if !status.Valid() {
+		return errors.WithStack(port.ErrInvalid)
+	}
+	return s.recorded(ctx, trackingTeamMember(id, membershipID), func(ctx context.Context, db *gorm.DB) error {
+		if _, err := teamOfMembership(db, id, membershipID); err != nil {
+			return err
+		}
+		result := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&TeamMember{TeamID: string(id), MembershipID: string(membershipID), Status: string(status)})
+		if result.Error != nil {
+			return errors.WithStack(result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return errors.Wrap(port.ErrAlreadyExists, "membership already in the team")
 		}
 		return nil
 	})

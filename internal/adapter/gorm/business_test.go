@@ -576,5 +576,23 @@ func TestTeamProvisioning(t *testing.T) {
 		members, err = store.ListTeamMembers(ctx, teamID)
 		require.NoError(t, err)
 		require.Empty(t, members)
+
+		// A member created suspended is written suspended at once: it is
+		// never active, and its creation is the only event.
+		cursor, err := store.CaptureEventCursor(ctx)
+		require.NoError(t, err)
+		_, err = svc.PutTeamMembership(ctx, testTenantID, fixture.org, teamID, f.user, model.StatusSuspended)
+		require.NoError(t, err)
+		members, err = store.ListTeamMembers(ctx, teamID)
+		require.NoError(t, err)
+		require.Len(t, members, 1)
+		require.Equal(t, model.StatusSuspended, members[0].Status())
+		events, _ := feedSince(t, store, cursor)
+		require.Equal(t, []string{"team_membership.created.v1"}, eventTypes(events))
+		var audits []xologorm.MutationAudit
+		require.NoError(t, db.Where("resource = ?", "team_member").Order("created_at").Find(&audits).Error)
+		require.NotEmpty(t, audits)
+		require.Equal(t, "null", audits[len(audits)-1].Before)
+		require.Contains(t, audits[len(audits)-1].After, `"status":"suspended"`)
 	})
 }
