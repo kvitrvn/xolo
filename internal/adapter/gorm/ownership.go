@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"maps"
+	"reflect"
 
 	"github.com/pkg/errors"
 	"github.com/xolo-gateway/xolo/internal/core/model"
@@ -102,6 +103,28 @@ func snapshotDiffersOnlyByLocale(db *gorm.DB, before map[mutationKey][]byte, id 
 		return false, nil
 	}
 	return equalButLocale(stored, want), nil
+}
+
+// assertOnlyLocalePreference refuses, for a locale change, a preferences row
+// that differs from the stored one by anything but its locale. The mutation
+// snapshot carries only the locale of the preferences, so the other columns
+// are checked here, where the row is written.
+func assertOnlyLocalePreference(db *gorm.DB, want *UserPreferences) error {
+	var rows []UserPreferences
+	if err := db.Where("user_id = ?", want.UserID).Limit(1).Find(&rows).Error; err != nil {
+		return errors.WithStack(err)
+	}
+	stored := UserPreferences{UserID: want.UserID}
+	if len(rows) != 0 {
+		stored = rows[0]
+	}
+	changed := *want
+	stored.ID, changed.ID = 0, 0
+	stored.Locale, changed.Locale = "", ""
+	if !reflect.DeepEqual(stored, changed) {
+		return errors.Wrapf(port.ErrOwnershipDenied, "%s", model.FamilyMember)
+	}
+	return nil
 }
 
 func equalButLocale(a, b map[string]json.RawMessage) bool {

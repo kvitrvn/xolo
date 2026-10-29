@@ -139,6 +139,9 @@ func TestMemberLocaleUnderOwnership(t *testing.T) {
 			linked.SetAuthenticationLink("oidc", "elsewhere")
 			linked.SetPreferences(model.NewUserPreferences(model.SetUserPreferencesLocale("en")))
 			require.ErrorIs(t, store.SaveUser(model.WithLocaleChange(ctx, alice), linked), port.ErrOwnershipDenied, "nor the sign-in link")
+			dark, enabled := model.CopyUser(user), true
+			dark.SetPreferences(model.NewUserPreferences(model.SetUserPreferencesLocale("en"), model.SetUserPrefencesDarkMode(&enabled)))
+			require.ErrorIs(t, store.SaveUser(model.WithLocaleChange(ctx, alice), dark), port.ErrOwnershipDenied, "nor the other preferences")
 
 			bob := model.NewUserID()
 			_, err = svc.PutTenantMember(cp, testTenantID, bob, service.CommonMember{Email: "bob@example.test", TenantRole: model.TenantRoleMember, Status: model.StatusActive})
