@@ -16,6 +16,7 @@ import (
 	pipelineAssets "github.com/xolo-gateway/xolo/internal/http/handler/webui/pipeline"
 	"github.com/xolo-gateway/xolo/internal/http/middleware/authn"
 	"github.com/xolo-gateway/xolo/internal/http/middleware/authz"
+	"github.com/xolo-gateway/xolo/internal/http/middleware/bridge"
 	localeMiddleware "github.com/xolo-gateway/xolo/internal/http/middleware/locale"
 	membershipsMiddleware "github.com/xolo-gateway/xolo/internal/http/middleware/memberships"
 	"github.com/xolo-gateway/xolo/internal/http/middleware/ratelimit"
@@ -102,10 +103,16 @@ func NewHTTPServerFromConfig(ctx context.Context, conf *config.Config) (*http.Se
 		return authnMiddleware(bridgeMiddleware(localeMiddleware.Member(locales)(h)))
 	}
 
-	// A language switch resolves the user when signed in, and still works
-	// signed out, as on the sign-in page.
+	userStore, err := getUserStoreFromConfig(ctx, conf)
+	if err != nil {
+		return nil, errors.Wrap(err, "could not create user store from config")
+	}
+
+	// A language switch looks the user up when signed in, and still works
+	// signed out, as on the sign-in page. The lookup writes nothing: the
+	// locale write opens the only transaction of the request.
 	localeSignedIn := func(h gohttp.Handler) gohttp.Handler {
-		return authn.Optional(h, authenticators...)(bridgeMiddleware(h))
+		return authn.Optional(h, authenticators...)(bridge.Lookup(userStore)(h))
 	}
 	transactions, err := getProvisioningTransactionFromConfig(ctx, conf)
 	if err != nil {
@@ -116,11 +123,6 @@ func NewHTTPServerFromConfig(ctx context.Context, conf *config.Config) (*http.Se
 	taskRunner, err := getTaskRunner(ctx, conf)
 	if err != nil {
 		return nil, errors.Wrap(err, "could not create task runner from config")
-	}
-
-	userStore, err := getUserStoreFromConfig(ctx, conf)
-	if err != nil {
-		return nil, errors.Wrap(err, "could not create user store from config")
 	}
 
 	orgStore, err := getOrgStoreFromConfig(ctx, conf)
