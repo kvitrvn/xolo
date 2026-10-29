@@ -873,8 +873,10 @@ member when Xolo offers a language close to it, the `xolo_locale` cookie,
 `Accept-Language`, then `XOLO_DEFAULT_LOCALE`. The pipeline editor reads the
 same language from `data-locale`.
 
-The language switch (`POST /locale`) always sets the cookie, so it works signed
-out. Signed in on an active account, it also stores the choice as the member's
+The language switch (`POST /locale`, rate limited) always sets the cookie, so
+it works signed out; a credential it can not use, such as an expired token or a
+broken session, counts as signed out rather than failing the switch. Signed in
+on an active account, it also stores the choice as the member's
 `locale`, the one member field Xolo writes itself **even with
 `member=control_plane`**: a person can choose their language in any
 application. That write changes only `locale`, in one provisioning
@@ -886,6 +888,12 @@ stays refused locally, and a write that changes anything besides the locale
 of the member's own representation is refused as a whole. The control plane
 reads the member back and adopts the value; its next `PUT` replaces `locale`
 like any other field: the last write wins.
+
+**Before upgrading**, make the control plane send `locale`. A `PUT` that omits
+it clears the language the member chose in Xolo, so a control plane unaware of
+the field resets every member's language the next time it replays its
+members. Upgrade the control plane first, or have it read members back and
+keep their `locale`, before letting it replay.
 
 Without a control plane, the same write publishes the same event: every
 member write is published, whoever owns the family.

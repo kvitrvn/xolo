@@ -932,6 +932,11 @@ même langue ne publie rien. Tous les autres champs du membre restent refusés
 localement. Le système de pilotage adopte le choix et le transmet aux autres
 applications ; son `PUT` suivant remplace `locale` comme tout autre champ.
 
+> **Avant la mise à jour.** Un `PUT` qui omet `locale` efface la langue choisie
+> par le membre dans Xolo. Un système de pilotage qui ignore ce champ
+> réinitialise donc la langue de chaque membre la prochaine fois qu'il rejoue
+> ses membres : mettez-le d'abord à jour pour qu'il transmette `locale`.
+
 ### Export d'adoption
 
 `GET /v1/xolo/adoption/export`, comme `xolo-adoption export`, diffuse en flux

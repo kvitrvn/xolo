@@ -211,7 +211,7 @@ func TestClosestServesTheNearestSupportedLanguage(t *testing.T) {
 			t.Errorf("Closest(%q)=%v,%v, want %v", tag, got, ok, want)
 		}
 	}
-	for _, tag := range []string{"", "pt-BR", "de", "not a tag"} {
+	for _, tag := range []string{"", "pt-BR", "de", "it", "not a tag"} {
 		if got, ok := bundle.Closest(tag); ok {
 			t.Errorf("Closest(%q)=%v", tag, got)
 		}

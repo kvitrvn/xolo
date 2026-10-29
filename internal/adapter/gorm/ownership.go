@@ -9,6 +9,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/xolo-gateway/xolo/internal/core/model"
 	"github.com/xolo-gateway/xolo/internal/core/port"
+	"gorm.io/gorm"
 )
 
 // OwnershipPolicy returns the write authority of each family, nil when the
@@ -37,8 +38,10 @@ func (s *Store) checkOwnership(ctx context.Context, family string) error {
 // A sign-in may write the very account it resolves, so that a member owned
 // by the control plane can still link its proven identity. A member choosing
 // their language may change the locale of their own representation, and
-// nothing else of it.
-func authorizeProjections(ctx context.Context, ownership model.OwnershipPolicy, changes []projectionChange) error {
+// nothing else of it: localeOnly reports whether the transaction changed
+// nothing of the member row but its locale, columns the representation does
+// not carry included.
+func authorizeProjections(ctx context.Context, ownership model.OwnershipPolicy, changes []projectionChange, localeOnly func(model.UserID) (bool, error)) error {
 	if ownership == nil {
 		return nil
 	}
@@ -55,7 +58,13 @@ func authorizeProjections(ctx context.Context, ownership model.OwnershipPolicy, 
 				continue
 			}
 			if choosingLocale && change.id.key == string(localeOf) && differsOnlyByLocale(change) {
-				continue
+				only, err := localeOnly(localeOf)
+				if err != nil {
+					return err
+				}
+				if only {
+					continue
+				}
 			}
 		}
 		return errors.Wrapf(port.ErrOwnershipDenied, "%s", family)
@@ -73,7 +82,30 @@ func differsOnlyByLocale(change projectionChange) bool {
 	if json.Unmarshal([]byte(change.stored.Representation), &stored) != nil || json.Unmarshal([]byte(change.want.Representation), &want) != nil {
 		return false
 	}
-	delete(stored, "locale")
-	delete(want, "locale")
-	return maps.EqualFunc(stored, want, func(a, b json.RawMessage) bool { return bytes.Equal(a, b) })
+	return equalButLocale(stored, want)
+}
+
+// snapshotDiffersOnlyByLocale reports whether the user row of id, as its
+// mutation snapshot records it, kept every column but locale since before.
+func snapshotDiffersOnlyByLocale(db *gorm.DB, before map[mutationKey][]byte, id model.UserID) (bool, error) {
+	key := mutationKey{kind: "user", id: string(id)}
+	old, tracked := before[key]
+	if !tracked {
+		return false, nil
+	}
+	current, err := mutationSnapshot(db, key)
+	if err != nil {
+		return false, err
+	}
+	var stored, want map[string]json.RawMessage
+	if json.Unmarshal(old, &stored) != nil || json.Unmarshal(current, &want) != nil || stored == nil || want == nil {
+		return false, nil
+	}
+	return equalButLocale(stored, want), nil
+}
+
+func equalButLocale(a, b map[string]json.RawMessage) bool {
+	delete(a, "locale")
+	delete(b, "locale")
+	return maps.EqualFunc(a, b, func(x, y json.RawMessage) bool { return bytes.Equal(x, y) })
 }

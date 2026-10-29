@@ -166,7 +166,7 @@ type recordingStore struct {
 	err   error
 }
 
-func (s *recordingStore) Set(_ context.Context, userID model.UserID, locale string) error {
+func (s *recordingStore) Set(_ context.Context, _ model.TenantID, userID model.UserID, locale string) error {
 	s.calls = append(s.calls, string(userID)+"="+locale)
 	return s.err
 }

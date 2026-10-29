@@ -66,7 +66,7 @@ func TestMemberLocaleUnderOwnership(t *testing.T) {
 		require.Equal(t, "fr", locale)
 
 		head, audits := lastSequence(t, db), auditCount(t, db)
-		require.NoError(t, locales.Set(ctx, alice, "es"))
+		require.NoError(t, locales.Set(ctx, testTenantID, alice, "es"))
 		locale, changed := memberLocaleOf(t, store, alice)
 		require.Equal(t, "es", locale)
 		require.NotEqual(t, etag, changed)
@@ -86,8 +86,8 @@ func TestMemberLocaleUnderOwnership(t *testing.T) {
 
 		t.Run("choosing the stored locale again is a no-op", func(t *testing.T) {
 			head, audits := lastSequence(t, db), auditCount(t, db)
-			require.NoError(t, locales.Set(ctx, alice, "es"))
-			require.NoError(t, locales.Set(ctx, alice, " es "))
+			require.NoError(t, locales.Set(ctx, testTenantID, alice, "es"))
+			require.NoError(t, locales.Set(ctx, testTenantID, alice, " es "))
 			require.Empty(t, eventsSince(t, db, head))
 			require.Equal(t, audits, auditCount(t, db))
 			_, etag := memberLocaleOf(t, store, alice)
@@ -96,19 +96,27 @@ func TestMemberLocaleUnderOwnership(t *testing.T) {
 
 		t.Run("a non-canonical tag is refused", func(t *testing.T) {
 			for _, invalid := range []string{"es-es", "ES", "es_ES", "toolong-Latn-US"} {
-				require.ErrorIs(t, locales.Set(ctx, alice, invalid), port.ErrInvalid, invalid)
+				require.ErrorIs(t, locales.Set(ctx, testTenantID, alice, invalid), port.ErrInvalid, invalid)
 			}
 		})
 
+		t.Run("only an active member of the tenant", func(t *testing.T) {
+			require.ErrorIs(t, locales.Set(ctx, model.TenantID(model.NewUserID()), alice, "en"), port.ErrNotFound, "another tenant")
+			carol := model.NewUserID()
+			_, err := svc.PutTenantMember(cp, testTenantID, carol, service.CommonMember{Email: "carol@example.test", TenantRole: model.TenantRoleMember, Status: model.StatusSuspended})
+			require.NoError(t, err)
+			require.ErrorIs(t, locales.Set(ctx, testTenantID, carol, "en"), port.ErrNotAllowed, "suspended")
+		})
+
 		t.Run("a tag Xolo does not offer is kept", func(t *testing.T) {
-			require.NoError(t, locales.Set(ctx, alice, "pt-BR"))
+			require.NoError(t, locales.Set(ctx, testTenantID, alice, "pt-BR"))
 			locale, _ := memberLocaleOf(t, store, alice)
 			require.Equal(t, "pt-BR", locale)
 		})
 
 		t.Run("clearing omits the locale", func(t *testing.T) {
 			head := lastSequence(t, db)
-			require.NoError(t, locales.Set(ctx, alice, ""))
+			require.NoError(t, locales.Set(ctx, testTenantID, alice, ""))
 			locale, _ := memberLocaleOf(t, store, alice)
 			require.Empty(t, locale)
 			require.Len(t, eventsSince(t, db, head), 1)
@@ -122,6 +130,16 @@ func TestMemberLocaleUnderOwnership(t *testing.T) {
 			next.SetPreferences(model.NewUserPreferences(model.SetUserPreferencesLocale("en")))
 			require.ErrorIs(t, store.SaveUser(model.WithLocaleChange(ctx, alice), next), port.ErrOwnershipDenied, "a locale change writes nothing else")
 
+			// Columns the representation does not carry are checked too.
+			admin := model.CopyUser(user)
+			admin.SetRoles(model.PlatformRoleAdmin)
+			admin.SetPreferences(model.NewUserPreferences(model.SetUserPreferencesLocale("en")))
+			require.ErrorIs(t, store.SaveUser(model.WithLocaleChange(ctx, alice), admin), port.ErrOwnershipDenied, "nor platform roles")
+			linked := model.CopyUser(user)
+			linked.SetAuthenticationLink("oidc", "elsewhere")
+			linked.SetPreferences(model.NewUserPreferences(model.SetUserPreferencesLocale("en")))
+			require.ErrorIs(t, store.SaveUser(model.WithLocaleChange(ctx, alice), linked), port.ErrOwnershipDenied, "nor the sign-in link")
+
 			bob := model.NewUserID()
 			_, err = svc.PutTenantMember(cp, testTenantID, bob, service.CommonMember{Email: "bob@example.test", TenantRole: model.TenantRoleMember, Status: model.StatusActive})
 			require.NoError(t, err)
@@ -134,7 +152,7 @@ func TestMemberLocaleUnderOwnership(t *testing.T) {
 		})
 
 		t.Run("a later control-plane PUT replaces the locale", func(t *testing.T) {
-			require.NoError(t, locales.Set(ctx, alice, "es"))
+			require.NoError(t, locales.Set(ctx, testTenantID, alice, "es"))
 			member.Locale = "en"
 			_, err := svc.PutTenantMember(cp, testTenantID, alice, member)
 			require.NoError(t, err)
@@ -164,7 +182,7 @@ func TestMemberLocaleRollback(t *testing.T) {
 			}
 		}))
 		head, audits := lastSequence(t, db), auditCount(t, db)
-		err = service.NewMemberLocale(store).Set(ctx, alice, "es")
+		err = service.NewMemberLocale(store).Set(ctx, testTenantID, alice, "es")
 		require.NoError(t, db.Callback().Create().Remove("test:fail_member_event"))
 		require.ErrorIs(t, err, boom)
 

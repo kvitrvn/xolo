@@ -872,6 +872,11 @@ member field stays refused locally. The control plane adopts the choice and
 passes it on to the other applications; its next `PUT` replaces `locale` like
 any other field.
 
+> **Before upgrading.** A `PUT` that omits `locale` clears the language the
+> member chose in Xolo. A control plane unaware of the field therefore resets
+> every member's language the next time it replays its members: upgrade it to
+> send `locale` first.
+
 ### Adoption export
 
 `GET /v1/xolo/adoption/export`, like `xolo-adoption export`, streams the

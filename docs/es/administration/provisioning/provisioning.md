@@ -912,6 +912,11 @@ publica nada. Todos los demás campos del miembro siguen rechazados localmente.
 El plano de control adopta la elección y la transmite a las demás
 aplicaciones; su siguiente `PUT` reemplaza `locale` como cualquier otro campo.
 
+> **Antes de actualizar.** Un `PUT` que omite `locale` borra el idioma que el
+> miembro eligió en Xolo. Un plano de control que desconoce el campo restablece
+> así el idioma de cada miembro la próxima vez que reproduce sus miembros:
+> actualícelo primero para que envíe `locale`.
+
 ### Exportación de adopción
 
 `GET /v1/xolo/adoption/export`, al igual que `xolo-adoption export`, transmite

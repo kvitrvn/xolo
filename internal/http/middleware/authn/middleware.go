@@ -24,19 +24,21 @@ func Middleware(onUnauthorized func(w http.ResponseWriter, r *http.Request), aut
 		return authenticate(next, func(w http.ResponseWriter, r *http.Request) {
 			metrics.AuthFailures.Inc()
 			onUnauthorized(w, r)
-		}, authenticators)
+		}, authenticators, false)
 	}
 }
 
 // Optional authenticates the request when one of the authenticators can and
 // lets it reach signedOut otherwise, which is not an authentication failure.
+// A credential an authenticator can not use, such as an expired token or a
+// broken session, is logged and treated as no credential at all.
 func Optional(signedOut http.Handler, authenticators ...Authenticator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
-		return authenticate(next, signedOut.ServeHTTP, authenticators)
+		return authenticate(next, signedOut.ServeHTTP, authenticators, true)
 	}
 }
 
-func authenticate(next http.Handler, onUnauthorized func(w http.ResponseWriter, r *http.Request), authenticators []Authenticator) http.Handler {
+func authenticate(next http.Handler, onUnauthorized func(w http.ResponseWriter, r *http.Request), authenticators []Authenticator, optional bool) http.Handler {
 	var fn http.HandlerFunc = func(w http.ResponseWriter, r *http.Request) {
 		for i, authenticator := range authenticators {
 			slog.Debug("authn middleware: trying", "index", i, "authenticator", fmt.Sprintf("%T", authenticator))
@@ -44,6 +46,11 @@ func authenticate(next http.Handler, onUnauthorized func(w http.ResponseWriter, 
 			if err != nil {
 				if errors.Is(err, ErrSkipRequest) {
 					return
+				}
+
+				if optional {
+					slog.WarnContext(r.Context(), "ignoring unusable credential", slog.Any("error", errors.WithStack(err)))
+					continue
 				}
 
 				slog.ErrorContext(r.Context(), "could not authenticate user", slog.Any("error", errors.WithStack(err)))

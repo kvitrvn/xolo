@@ -92,7 +92,7 @@ func Member(bundle *i18n.Bundle) func(http.Handler) http.Handler {
 
 // Store records the language a member chooses.
 type Store interface {
-	Set(ctx context.Context, userID model.UserID, locale string) error
+	Set(ctx context.Context, tenantID model.TenantID, userID model.UserID, locale string) error
 }
 
 // Announce declares the language of a response and the request headers it
@@ -119,7 +119,7 @@ func Handler(bundle *i18n.Bundle, secure bool, store Store, signedIn func(http.H
 			return
 		}
 		if user := httpCtx.User(r.Context()); user != nil && user.Active() && store != nil {
-			if err := store.Set(r.Context(), user.ID(), tag.String()); err != nil {
+			if err := store.Set(r.Context(), httpCtx.TenantID(r.Context()), user.ID(), tag.String()); err != nil {
 				slog.ErrorContext(r.Context(), "could not store the member locale", slog.Any("error", err))
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return

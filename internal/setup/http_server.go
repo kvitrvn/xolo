@@ -346,7 +346,7 @@ func NewHTTPServerFromConfig(ctx context.Context, conf *config.Config) (*http.Se
 		// rendered in it too.
 		http.WithMiddleware(localeMiddleware.Middleware(locales, defaultLocale, "/assets/", "/api/", "/metrics/", "/auth/token/")),
 		http.WithMiddleware(tenantMiddleware),
-		http.WithRoute("POST /locale", localeMiddleware.Handler(locales, conf.HTTP.Session.Cookie.Secure, memberLocale, localeSignedIn)),
+		http.WithRoute("POST /locale", rateLimiter(localeMiddleware.Handler(locales, conf.HTTP.Session.Cookie.Secure, memberLocale, localeSignedIn))),
 		http.WithMount("/assets/", assets),
 		http.WithMount("/assets/pipeline/", pipelineAssets.NewAssetsHandler()),
 		http.WithMount("/auth/oidc/", rateLimiter(oidcAuthn)),
