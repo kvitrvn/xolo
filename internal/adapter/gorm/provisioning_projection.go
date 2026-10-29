@@ -209,6 +209,9 @@ func projectionRepresentation(id projectionID, row snapshotRow) (string, error) 
 		if name := row.str("display_name"); name != "" {
 			rep["display_name"] = name
 		}
+		if locale := row.str("locale"); locale != "" {
+			rep["locale"] = locale
+		}
 		// The declared identity is part of the member; the sign-in link is
 		// not, so linking a sign-in never changes the projection.
 		if issuer := row.str("identity_issuer"); issuer != "" {
